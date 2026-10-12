@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ساندکلاد ایکس</string>
+    <string name="login_title">ورود به ساندکلاد</string>
+
+    <string name="search_hint">نام آهنگ، خواننده یا لینک ساندکلاد…</string>
+    <string name="btn_search">جستجو</string>
+    <string name="btn_trending">ترندها</string>
+    <string name="btn_favorites">علاقه‌مندی‌ها</string>
+    <string name="state_idle">برای شروع، یک آهنگ یا خواننده را جستجو کنید</string>
+    <string name="state_searching">در حال جستجو…</string>
+    <string name="state_loading_more">در حال بارگذاری بیشتر…</string>
+    <string name="state_no_results">چیزی پیدا نشد</string>
+    <string name="state_network_error">خطای شبکه — اتصال اینترنت را بررسی کنید</string>
+    <string name="state_api_error">دسترسی به ساندکلاد ممکن نشد، دوباره تلاش کنید</string>
+    <string name="state_favorites_empty">هنوز آهنگی به علاقه‌مندی‌ها اضافه نکرده‌اید</string>
+
+    <string name="menu_login">ورود با مرورگر (برای آهنگ‌های خصوصی)</string>
+    <string name="menu_logout">خروج از حساب</string>
+    <string name="menu_downloads">دانلودها</string>
+    <string name="menu_about">درباره برنامه</string>
+    <string name="logged_in">وارد شده‌اید</string>
+    <string name="logged_out">وارد نشده‌اید</string>
+
+    <string name="action_play">پخش</string>
+    <string name="action_play_next">پخش بعدی</string>
+    <string name="action_download">دانلود</string>
+    <string name="action_download_128">دانلود MP3 (128kbps)</string>
+    <string name="action_download_original">دانلود فایل اصلی (بهترین کیفیت)</string>
+    <string name="action_copy_link">کپی لینک</string>
+    <string name="action_open_browser">باز کردن در مرورگر</string>
+    <string name="action_add_favorite">افزودن به علاقه‌مندی‌ها</string>
+    <string name="action_remove_favorite">حذف از علاقه‌مندی‌ها</string>
+
+    <string name="toast_copied">لینک کپی شد</string>
+    <string name="toast_download_started">دانلود شروع شد؛ در پوشه Music/SoundCloudX</string>
+    <string name="toast_download_failed">دانلود ممکن نشد: %1$s</string>
+    <string name="toast_not_streamable">این آهنگ قابل پخش نیست (محدودیت ساندکلاد یا نیاز به حساب Go+)</string>
+    <string name="toast_login_success">با موفقیت وارد شدید</string>
+    <string name="toast_need_permission">برای ذخیره فایل در Music اجازه دسترسی لازم است</string>
+    <string name="toast_need_login">برای فایل اصلی باید وارد حساب ساندکلاد شوید</string>
+
+    <string name="dlg_close">بستن</string>
+    <string name="dlg_about_title">درباره برنامه</string>
+    <string name="menu_reload_api">بازخوانی کلید API</string>
+    <string name="menu_clear_cache">پاک کردن کش تصاویر</string>
+    <string name="menu_view_log">مشاهده گزارش خطا</string>
+    <string name="menu_share">اشتراک‌گذاری</string>
+    <string name="action_share">اشتراک‌گذاری</string>
+    <string name="action_queue_add">افزودن به صف پخش</string>
+    <string name="action_play_now">پخش همین حالا</string>
+    <string name="toast_cache_cleared">کش تصاویر پاک شد</string>
+    <string name="toast_client_id_reloaded">کلید API دوباره خوانده شد</string>
+    <string name="toast_log_saved">گزارش ذخیره شد: %1$s</string>
+    <string name="toast_download_recorded">در صف دانلود: %1$s</string>
+    <string name="dlg_downloads_empty">هنوز فایلی دانلود نشده است</string>
+    <string name="dlg_downloads_folder">پوشه: Music/SoundCloudX</string>
+    <string name="login_loaded">پس از ورود، بازیابی خودکار انجام می‌شود</string>
+    <string name="login_done">ورود انجام شد</string>
+    <string name="toast_play_error">پخش ممکن نشد: %1$s</string>
+    <string name="status_results">%1$d نتیجه — %2$s</string>
+    <string name="status_playing">در حال پخش: %1$s</string>
+    <string name="status_loading_track">در حال آماده‌سازی: %1$s</string>
+    <string name="about_text">ساندکلاد ایکس %1$s\n\nدانلودر، جستجوگر و پخش‌کننده ساندکلاد\n• جستجو و ترندها\n• پخش آنلاین و پس‌زمینه\n• دانلود MP3 و فایل اصلی\n• علاقه‌مندی‌ها و صف پخش\n\nاین برنامه یک کلاینت غیررسمی و متن‌باز است و به ساندکلاد وابستگی ندارد.</string>
+</resources>

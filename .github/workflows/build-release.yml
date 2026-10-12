@@ -1,0 +1,263 @@
+name: Build & Release
+
+# ---------------------------------------------------------------- triggers ---
+# * "Run workflow" button  -> builds and publishes a release right away
+# * every push to main     -> builds and publishes a release
+# * push of a v* tag       -> builds and publishes that version
+# * pull requests          -> builds only (APK + EXE are kept as artifacts)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version name for the release (leave empty for 1.0.<run number>)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  # =========================================================== Android ========
+  android:
+    name: Android APK (7.0 - 16)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Create release signing key
+        working-directory: android
+        env:
+          KS_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          if [ -n "${KS_BASE64}" ]; then
+            echo "Using the keystore from the repository secrets."
+            printf '%s' "${KS_BASE64}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KEYSTORE_PASSWORD=${KS_PASSWORD}"   >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${KS_ALIAS}"               >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${KS_KEY_PASSWORD}"     >> "$GITHUB_ENV"
+          else
+            echo "No keystore secret found -> generating a temporary one."
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.keystore" \
+              -alias soundcloudx -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass soundcloudx -keypass soundcloudx \
+              -dname "CN=SoundCloud X, OU=Android, O=SoundCloud X, C=IR"
+            echo "KEYSTORE_PASSWORD=soundcloudx" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=soundcloudx"         >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=soundcloudx"      >> "$GITHUB_ENV"
+          fi
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          fi
+          case "${VERSION}" in
+            *[!0-9.]*|"") VERSION="1.0.${{ github.run_number }}" ;;
+          esac
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+      - name: Build release APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleRelease \
+            -PappVersionName="${{ steps.ver.outputs.version }}" \
+            -PappVersionCode="${{ github.run_number }}" 2>&1 | tee ../gradle-build.log
+
+      - name: Show compiler errors
+        if: failure()
+        run: |
+          grep -E "error:|e: |FAILURE:|Execution failed|What went wrong|Could not (resolve|find|determine)" ../gradle-build.log \
+            | head -30 | while IFS= read -r line; do echo "::error title=Gradle::${line}"; done
+
+      - name: Collect APK
+        run: |
+          set -e
+          mkdir -p dist
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" -type f | head -1)
+          test -n "${APK}"
+          cp "${APK}" "dist/SoundCloudX-${{ steps.ver.outputs.version }}.apk"
+          ls -la dist
+
+      - name: Sign check
+        run: |
+          set -e
+          APK=$(find dist -name "*.apk" | head -1)
+          echo "APK: ${APK}"
+          "$ANDROID_HOME"/build-tools/*/aapt dump badging "${APK}" | head -5 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+  # =========================================================== Windows ========
+  windows:
+    name: Windows EXE (7 - 11)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python 3.8 is the newest Python that still runs on Windows 7, so the
+      # exe stays compatible with 7 / 8 / 10 / 11.
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+          architecture: "x64"
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          fi
+          case "${VERSION}" in
+            *[!0-9.]*|"") VERSION="1.0.${{ github.run_number }}" ;;
+          esac
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+      - name: Install dependencies
+        working-directory: windows
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Write the version into the sources
+        run: python tools/bump_version.py "${{ steps.ver.outputs.version }}"
+
+      - name: Self test
+        working-directory: windows
+        run: python selftest.py
+
+      - name: Build EXE
+        working-directory: windows
+        run: pyinstaller --noconfirm --clean SoundCloudX.spec
+
+      - name: Show build errors
+        if: failure()
+        shell: bash
+        run: |
+          for log in windows/build/SoundCloudX/warn-SoundCloudX.txt windows/*.log; do
+            [ -f "$log" ] || continue
+            tail -25 "$log" | while IFS= read -r line; do echo "::error title=PyInstaller::${line}"; done
+          done
+          echo "::error title=Build::the PyInstaller build failed, see the log above"
+
+      - name: Collect EXE
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+          cp windows/dist/SoundCloudX.exe dist/SoundCloudX.exe
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/*.exe
+          if-no-files-found: error
+
+  # ============================================================ Release =======
+  release:
+    name: Publish release
+    needs: [android, windows]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the built files
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve tag
+        id: ver
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          fi
+          case "${VERSION}" in
+            *[!0-9.]*|"") VERSION="1.0.${{ github.run_number }}" ;;
+          esac
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          ls -la dist
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: SoundCloud X ${{ steps.ver.outputs.version }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          fail_on_unmatched_files: false
+          body: |
+            ## SoundCloud X ${{ steps.ver.outputs.version }}
+
+            آپلیکیشن دانلودر / پخش‌کننده / جستجوگر ساندکلاد
+
+            | فایل | دستگاه | پشتیبانی |
+            |------|--------|----------|
+            | `SoundCloudX-${{ steps.ver.outputs.version }}.apk` | اندروید | اندروید ۷.۰ (API 24) تا اندروید ۱۵ و ۱۶ |
+            | `SoundCloudX.exe` | ویندوز | ویندوز ۷ تا ۱۱ (۶۴ بیتی) |
+
+            ### نصب
+            * **اندروید:** فایل APK را روی گوشی کپی و نصب کنید (اجازه‌ی «نصب از منابع ناشناس» لازم است).
+            * **ویندوز:** فایل EXE را اجرا کنید؛ نیازی به نصب پایتون نیست. اگر اسمارت‌اسکرین هشدار داد روی *More info → Run anyway* بزنید.
+
+            ### امکانات
+            * جستجوی آهنگ / خواننده و باز کردن مستقیم لینک ساندکلاد
+            * ترندهای همه‌ی سبک‌ها (الکترونیک، هیپ‌هاپ، راک، ...)
+            * پخش آنلاین + پخش در پس‌زمینه با نوتیفیکیشن و کنترل هدست
+            * دانلود MP3 با کیفیت ۱۲۸ و فایل اصلی (بعد از ورود با حساب)
+            * علاقه‌مندی‌ها، صف پخش، دانلودها
+
+            بدون نیاز به کلید API شخصی — کلاینت به‌صورت خودکار کلید عمومی ساندکلاد را پیدا می‌کند.
+        files: |
+          dist/*.apk
+          dist/*.exe

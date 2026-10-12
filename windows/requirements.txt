@@ -1,0 +1,11 @@
+# Pinned on purpose: these are the last versions that still install on
+# Python 3.8, which is the newest Python that runs on Windows 7.
+requests==2.31.0
+customtkinter==5.2.2
+darkdetect==0.8.0
+Pillow==10.4.0
+pygame==2.5.2
+mutagen==1.47.0
+
+# build only
+pyinstaller==5.13.2

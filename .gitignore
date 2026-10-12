@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------- android ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/captures/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# ---------------------------------------------------------------- windows ----
+windows/build/
+windows/dist/
+windows/__pycache__/
+windows/**/__pycache__/
+*.spec.bak
+*.exe
+
+# ------------------------------------------------------------- python / ide --
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+dist/
+build/
+.DS_Store
+Thumbs.db
+gradle-build.log
