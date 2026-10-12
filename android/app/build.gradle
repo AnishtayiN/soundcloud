@@ -1,0 +1,77 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Version can be overridden from CI:  -PappVersionName=1.2.3 -PappVersionCode=12
+def appVersionName = (project.findProperty("appVersionName") ?: "1.0.0").toString()
+def appVersionCode = (project.findProperty("appVersionCode") ?: "1").toString().toInteger()
+
+android {
+    namespace 'com.soundcloudx.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.soundcloudx.app"
+        minSdk 24          // Android 7.0 (Nougat) ... Android 15 / 16
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appVersionName
+        resourceConfigurations += ["fa", "en"]
+    }
+
+    // Release signing.
+    // In CI we generate a keystore and pass its path/passwords through env vars.
+    // Without those env vars the release build is signed with the debug key so
+    // that a locally built APK is still installable on a real phone.
+    def ksPath = System.getenv("KEYSTORE_FILE")
+    def hasKey = ksPath != null && !ksPath.isEmpty() && file(ksPath).exists()
+
+    signingConfigs {
+        if (hasKey) {
+            release {
+                storeFile file(ksPath)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig hasKey ? signingConfigs.release : signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            applicationIdSuffix ".debug"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            outputFileName = "SoundCloudX-${appVersionName}-${variant.buildType.name}.apk"
+        }
+    }
+}
+
+dependencies {
+    // Intentionally no external dependencies: the app uses only the Android
+    // framework (HttpURLConnection + org.json + WebView), which keeps the APK
+    // small (~1 MB) and makes the build 100% reproducible offline.
+}

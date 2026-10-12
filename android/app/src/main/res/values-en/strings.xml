@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SoundCloud X</string>
+    <string name="login_title">Sign in to SoundCloud</string>
+
+    <string name="search_hint">Song, artist or SoundCloud link…</string>
+    <string name="btn_search">Search</string>
+    <string name="btn_trending">Trending</string>
+    <string name="btn_favorites">Favorites</string>
+    <string name="state_idle">Search for a song or an artist to start</string>
+    <string name="state_searching">Searching…</string>
+    <string name="state_loading_more">Loading more…</string>
+    <string name="state_no_results">Nothing found</string>
+    <string name="state_network_error">Network error — check your connection</string>
+    <string name="state_api_error">Could not reach SoundCloud, please try again</string>
+    <string name="state_favorites_empty">No favorites yet</string>
+
+    <string name="menu_login">Sign in with browser (private tracks)</string>
+    <string name="menu_logout">Sign out</string>
+    <string name="menu_downloads">Downloads</string>
+    <string name="menu_about">About</string>
+    <string name="logged_in">signed in</string>
+    <string name="logged_out">not signed in</string>
+
+    <string name="action_play">Play</string>
+    <string name="action_play_next">Play next</string>
+    <string name="action_download">Download</string>
+    <string name="action_download_128">Download MP3 (128 kbps)</string>
+    <string name="action_download_original">Download original file (best quality)</string>
+    <string name="action_copy_link">Copy link</string>
+    <string name="action_open_browser">Open in browser</string>
+    <string name="action_add_favorite">Add to favorites</string>
+    <string name="action_remove_favorite">Remove from favorites</string>
+
+    <string name="toast_copied">Link copied</string>
+    <string name="toast_download_started">Download started — Music/SoundCloudX</string>
+    <string name="toast_download_failed">Download failed: %1$s</string>
+    <string name="toast_not_streamable">This track can not be streamed (SoundCloud restriction or Go+ only)</string>
+    <string name="toast_login_success">Signed in successfully</string>
+    <string name="toast_need_permission">Storage permission is required to save into Music</string>
+    <string name="toast_need_login">Sign in to download original files</string>
+
+    <string name="dlg_close">Close</string>
+    <string name="dlg_about_title">About</string>
+    <string name="menu_reload_api">Refresh API key</string>
+    <string name="menu_clear_cache">Clear image cache</string>
+    <string name="menu_view_log">View error log</string>
+    <string name="menu_share">Share</string>
+    <string name="action_share">Share</string>
+    <string name="action_queue_add">Add to queue</string>
+    <string name="action_play_now">Play now</string>
+    <string name="toast_cache_cleared">Image cache cleared</string>
+    <string name="toast_client_id_reloaded">API key refreshed</string>
+    <string name="toast_log_saved">Log saved: %1$s</string>
+    <string name="toast_download_recorded">Queued: %1$s</string>
+    <string name="dlg_downloads_empty">No downloads yet</string>
+    <string name="dlg_downloads_folder">Folder: Music/SoundCloudX</string>
+    <string name="login_loaded">You will be signed in automatically</string>
+    <string name="login_done">Signed in</string>
+    <string name="toast_play_error">Playback failed: %1$s</string>
+    <string name="status_results">%1$d results — %2$s</string>
+    <string name="status_playing">Playing: %1$s</string>
+    <string name="status_loading_track">Loading: %1$s</string>
+    <string name="about_text">SoundCloud X %1$s\n\nSoundCloud downloader, search and player\n• Search &amp; trending\n• Online and background playback\n• MP3 and original file download\n• Favorites and play queue\n\nUnofficial open-source client, not affiliated with SoundCloud.</string>
+</resources>
