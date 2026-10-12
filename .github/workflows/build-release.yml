@@ -1,10 +1,13 @@
 name: Build & Release
 
 # ---------------------------------------------------------------- triggers ---
-# * "Run workflow" button  -> builds and publishes a release right away
-# * every push to main     -> builds and publishes a release
-# * push of a v* tag       -> builds and publishes that version
+# * "Run workflow" button  -> builds both apps and publishes a release
+# * push of a v* tag       -> builds both apps and publishes that version
+# * every push to main     -> builds both apps (artifacts only, no release)
 # * pull requests          -> builds only (APK + EXE are kept as artifacts)
+#
+# Releases are therefore only created on purpose: either with the
+# "Run workflow" button or by pushing a "vX.Y.Z" tag.
 on:
   workflow_dispatch:
     inputs:
@@ -272,7 +275,7 @@ jobs:
   release:
     name: Publish release
     needs: [android, windows]
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
