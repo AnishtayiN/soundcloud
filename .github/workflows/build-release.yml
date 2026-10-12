@@ -111,16 +111,32 @@ jobs:
       - name: Build release APK
         working-directory: android
         run: |
+          # pipefail matters: the log is piped through tee, so without it a
+          # failing Gradle run would still leave the step green.
+          set -o pipefail
           chmod +x ./gradlew
-          ./gradlew --no-daemon :app:assembleRelease \
+          ls -l ./gradlew gradle/wrapper/gradle-wrapper.jar
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease \
             -PappVersionName="${{ steps.ver.outputs.version }}" \
             -PappVersionCode="${{ github.run_number }}" 2>&1 | tee ../gradle-build.log
 
-      - name: Show compiler errors
+      # Pulls the interesting part of the Gradle log out as annotations, which
+      # is the only part of the log that is reachable over the REST API.
+      - name: Show build errors
         if: failure()
         run: |
-          grep -E "error:|e: |FAILURE:|Execution failed|What went wrong|Could not (resolve|find|determine)" ../gradle-build.log \
-            | head -30 | while IFS= read -r line; do echo "::error title=Gradle::${line}"; done
+          LOG=gradle-build.log
+          if [ -f "$LOG" ]; then
+            tail -40 "$LOG" || true
+            ERRORS=$(grep -nE "error:|e: |FAILURE:|Execution failed|What went wrong|Caused by|Could not|Unsupported|AAPT|Unable to|No such|not found" "$LOG" | head -14 | tr '\n' '~')
+            if [ -n "${ERRORS}" ]; then
+              echo "::error title=Gradle errors::${ERRORS}"
+            fi
+            TAIL=$(tail -14 "$LOG" | tr '\n' '~')
+            echo "::error title=Gradle log tail::${TAIL}"
+          else
+            echo "::error title=Gradle log::no gradle-build.log was written"
+          fi
 
       - name: Collect APK
         run: |
