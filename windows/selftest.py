@@ -34,6 +34,8 @@ def check(name, condition, detail=""):
     else:
         print("  FAIL %s %s" % (name, detail))
         FAILURES.append("%s %s" % (name, detail))
+        if os.environ.get("GITHUB_ACTIONS"):
+            print("::error title=Windows self test::" + (name + " " + str(detail)).replace("\n", "%0A"))
 
 
 def section(title):
@@ -474,7 +476,10 @@ def main(argv):
             test()
         except Exception:
             FAILURES.append(test.__name__)
-            print("  EXCEPTION in %s\n%s" % (test.__name__, traceback.format_exc()))
+            detail = traceback.format_exc()
+            print("  EXCEPTION in %s\n%s" % (test.__name__, detail))
+            if os.environ.get("GITHUB_ACTIONS"):
+                print("::error title=Windows test exception::" + detail.replace("\n", "%0A"))
 
     print("\n%d checks, %d failures" % (CHECKS[0], len(FAILURES)))
     if FAILURES:

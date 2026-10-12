@@ -50,9 +50,16 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
-      - name: Install build platform
-        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - name: Use the runner's Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then echo '::error::Android SDK is missing'; exit 1; fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [ ! -f "$SDK/platforms/android-34/android.jar" ] || [ ! -d "$SDK/build-tools/34.0.0" ]; then
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-34' 'build-tools;34.0.0'
+          fi
       - uses: actions/cache@v4
         with:
           path: |
@@ -132,8 +139,10 @@ jobs:
         if: failure()
         run: |
           if [ -f gradle-build.log ]; then
-            grep -E 'error:|FAILURE:|Execution failed|Caused by:|Error:' gradle-build.log | head -30 || true
-            tail -60 gradle-build.log
+            grep -E 'error:|FAILURE:|Execution failed|Caused by:|Error:' gradle-build.log | head -20 | while IFS= read -r line; do
+              echo "::error title=Android build::$line"
+            done || true
+            tail -20 gradle-build.log | while IFS= read -r line; do echo "::error title=Android log::$line"; done
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -208,7 +217,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.8.10"
+          python-version: "3.8"
           architecture: x64
       - name: Install build dependencies (not required by end users)
         working-directory: windows
@@ -256,6 +265,13 @@ jobs:
           name: windows-exe
           path: dist/*.exe
           if-no-files-found: error
+      - name: Annotate Windows runtime failures
+        if: failure()
+        run: |
+          Get-ChildItem runtime-reports -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object {
+            $r = Get-Content -Raw -Encoding UTF8 $_.FullName | ConvertFrom-Json
+            if ($r.error) { Write-Host ("::error title=Packaged runtime::" + ($r.error -replace "`n", '%0A' -replace "`r", '%0D')) }
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
