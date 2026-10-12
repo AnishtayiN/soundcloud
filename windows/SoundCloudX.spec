@@ -26,6 +26,7 @@ a = Analysis(
     binaries=ctk_binaries + pygame_binaries,
     datas=ctk_data + pygame_data + license_data + collect_data_files("certifi") + [
         ("assets/icon.ico", "assets"), ("assets/icon.png", "assets"),
+        ("assets/diagnostic.mp3", "assets"),
         ("selftest.py", "."), ("THIRD_PARTY_NOTICES.txt", "."),
     ],
     hiddenimports=ctk_hidden + pygame_hidden + collect_submodules("scx") +

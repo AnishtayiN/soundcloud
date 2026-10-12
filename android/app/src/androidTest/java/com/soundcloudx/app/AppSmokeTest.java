@@ -12,6 +12,7 @@ import android.widget.ListView;
 import androidx.core.content.FileProvider;
 import androidx.lifecycle.Lifecycle;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.test.core.app.ActivityScenario;
@@ -22,6 +23,7 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.concurrent.CountDownLatch;
@@ -81,23 +83,48 @@ public class AppSmokeTest {
                 .putInt(16).putShort((short)1).putShort((short)2).putInt(44100).putInt(176400)
                 .putShort((short)4).putShort((short)16).put("data".getBytes("US-ASCII")).putInt(length);
         try (OutputStream out = new FileOutputStream(wav)) { out.write(header.array()); out.write(new byte[length]); }
-        CountDownLatch played = new CountDownLatch(1);
+        final CountDownLatch[] played = {new CountDownLatch(1)};
         ExoPlayer[] player = new ExoPlayer[1];
         try {
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                 player[0] = new ExoPlayer.Builder(c).build();
                 player[0].addListener(new Player.Listener() {
-                    @Override public void onIsPlayingChanged(boolean playing) { if (playing) played.countDown(); }
+                    @Override public void onIsPlayingChanged(boolean playing) { if (playing) played[0].countDown(); }
                 });
                 player[0].setMediaItem(MediaItem.fromUri(Uri.fromFile(wav)));
                 player[0].prepare(); player[0].play();
             });
-            assertTrue("bundled playback engine did not start", played.await(20, TimeUnit.SECONDS));
+            assertTrue("bundled playback engine did not start", played[0].await(20, TimeUnit.SECONDS));
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                 player[0].pause(); player[0].seekTo(500); player[0].setVolume(0.5f);
                 assertEquals(0.5f, player[0].getVolume(), 0.01f);
                 player[0].play();
             });
+            // Exercise the actual MP3 decoder AND the bundled HLS source, not
+            // just PCM/WAV. No external server/ffmpeg or SoundCloud required.
+            File mp3 = new File(c.getCacheDir(), "diagnostic.mp3");
+            File playlist = new File(c.getCacheDir(), "diagnostic.m3u8");
+            try {
+                try (InputStream in = InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("diagnostic.mp3");
+                     OutputStream out = new FileOutputStream(mp3)) {
+                    byte[] buffer = new byte[8192]; int n;
+                    while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+                }
+                String hls = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n"
+                        + "#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:0.549,\ndiagnostic.mp3\n#EXT-X-ENDLIST\n";
+                try (OutputStream out = new FileOutputStream(playlist)) { out.write(hls.getBytes("UTF-8")); }
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                    player[0].stop();
+                    played[0] = new CountDownLatch(1);
+                    player[0].setMediaItem(new MediaItem.Builder().setUri(Uri.fromFile(playlist))
+                            .setMimeType(MimeTypes.APPLICATION_M3U8).build());
+                    player[0].prepare(); player[0].play();
+                });
+                assertTrue("bundled HLS/MP3 engine did not start", played[0].await(20, TimeUnit.SECONDS));
+            } finally {
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> player[0].stop());
+                playlist.delete(); mp3.delete();
+            }
         } finally {
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> { if (player[0] != null) player[0].release(); });
             wav.delete();

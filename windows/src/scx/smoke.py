@@ -84,6 +84,12 @@ def run(argv):
                 player.set_volume(0.25)
                 assert player.volume == 0.25
                 player.stop()
+                player.load(util.resource_path("assets", "diagnostic.mp3"))
+                assert player.duration_ms > 300, "bundled MP3 fixture/metadata unreadable"
+                player.play()
+                assert player.busy(), "bundled MP3 decoder/DLL did not start"
+                player.stop()
+                report["checks"]["bundled_mp3_decoder"] = True
                 pygame.mixer.quit()
             report["checks"]["bundled_audio_runtime"] = True
             report["ok"] = True

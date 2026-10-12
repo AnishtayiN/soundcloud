@@ -404,6 +404,8 @@ def test_player():
     except Exception as exc:
         check("null player refuses to play", "unit test" in str(exc), str(exc))
     check("measure_duration of junk is 0", Player.measure_duration(__file__) == 0)
+    from scx.util import resource_path
+    check("real MP3 fixture decodes metadata", Player.measure_duration(resource_path("assets", "diagnostic.mp3")) > 300)
 
 
 def test_ui():

@@ -137,7 +137,7 @@ jobs:
           grep -q "launchable-activity: name='com.soundcloudx.app.MainActivity'" dist/android-package.txt
           grep -q "versionName='$APP_VERSION'" dist/android-package.txt
           grep -q "versionCode='$APP_CODE'" dist/android-package.txt
-          python3 tools/check_apk.py "$APK"
+          python3 tools/check_apk.py "$APK" dist/android-package.txt
           cp "$APK" "dist/SoundCloudX-$APP_VERSION.apk"
           mapfile -t DEBUGS < <(find android/app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -type f)
           mapfile -t TESTS < <(find android/app/build/outputs/apk/androidTest/debug -maxdepth 1 -name '*.apk' -type f)
