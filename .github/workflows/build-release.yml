@@ -39,8 +39,24 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # The ubuntu runner images ship the Android SDK (build-tools, platforms,
+      # accepted licenses), so we only make sure the environment points at it.
+      # If something is missing Gradle downloads it during the build.
+      - name: Locate the Android SDK
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            echo "::error::no Android SDK on this runner"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "SDK: $SDK"
+          ls "$SDK"
+          echo "--- platforms ---";  ls "$SDK/platforms" 2>/dev/null | tail -5
+          echo "--- build-tools ---"; ls "$SDK/build-tools" 2>/dev/null | tail -5
+          echo "--- licenses ---";   ls "$SDK/licenses" 2>/dev/null
 
       - name: Cache Gradle
         uses: actions/cache@v4
