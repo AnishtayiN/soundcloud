@@ -4,10 +4,11 @@ from __future__ import annotations
 import itertools
 import os
 import threading
+import tempfile
 import time
 
 from . import util
-from .media import audio_header, media_url, parse_playlist
+from .media import audio_extension, audio_header, media_url, parse_playlist
 
 CHUNK = 128 * 1024
 MAX_PLAYLIST = 1024 * 1024
@@ -29,6 +30,20 @@ def _close(response):
 
 
 class Downloader(object):
+    _name_lock = threading.Lock()
+    _reserved = set()
+
+    @classmethod
+    def _reserve(cls, path):
+        with cls._name_lock:
+            base, ext = os.path.splitext(path)
+            candidate, index = path, 0
+            while os.path.exists(candidate) or candidate in cls._reserved:
+                index += 1
+                candidate = "%s (%d)%s" % (base, index, ext)
+            cls._reserved.add(candidate)
+            return candidate
+
     def __init__(self, session, timeout=30):
         self.session = session
         self.timeout = timeout
@@ -65,13 +80,18 @@ class Downloader(object):
                 raise IOError("HLS playlist is too large")
         return body.decode("utf-8-sig")
 
-    def fetch_to(self, url, target_path, on_progress=None, cancel_event=None, verify_audio=True):
+    def fetch_to(self, url, target_path, on_progress=None, cancel_event=None, verify_audio=True,
+                 original=False, reserve_name=False):
         """Never publish a partial file, HTML error page or playlist as audio."""
         _cancel(cancel_event)
         folder = os.path.dirname(target_path)
         if folder:
             os.makedirs(folder, exist_ok=True)
-        part = target_path + ".part"
+        target_path = os.path.abspath(target_path)
+        if reserve_name:
+            target_path = self._reserve(target_path)
+        fd, part = tempfile.mkstemp(prefix=os.path.basename(target_path) + ".", suffix=".part", dir=folder or ".")
+        os.close(fd)
         response = None
         started, done = time.monotonic(), 0
 
@@ -119,8 +139,18 @@ class Downloader(object):
                             _close(segment)
             else:
                 content_type = response.headers.get("Content-Type", "").lower()
-                if verify_audio and ("text/" in content_type or "json" in content_type or not audio_header(first)):
+                if verify_audio and ("text/" in content_type or "json" in content_type or not audio_header(first, mp3_only=not original)):
                     raise IOError("the server did not send an audio file")
+                if original:
+                    suffix = audio_extension(first, os.path.splitext(target_path)[1])
+                    if suffix != os.path.splitext(target_path)[1]:
+                        renamed = os.path.splitext(target_path)[0] + suffix
+                        if reserve_name:
+                            with self._name_lock:
+                                self._reserved.discard(target_path)
+                            target_path = self._reserve(renamed)
+                        else:
+                            target_path = renamed
                 total = int(response.headers.get("Content-Length") or 0)
                 with open(part, "wb") as stream:
                     for chunk in itertools.chain([first], chunks):
@@ -144,9 +174,13 @@ class Downloader(object):
         finally:
             if response is not None:
                 _close(response)
+            if reserve_name:
+                with self._name_lock:
+                    self._reserved.discard(target_path)
 
-    def download_track(self, url, folder, filename, on_progress=None, cancel_event=None):
-        return self.fetch_to(url, util.unique_path(folder, filename), on_progress, cancel_event)
+    def download_track(self, url, folder, filename, on_progress=None, cancel_event=None, original=False):
+        return self.fetch_to(url, os.path.join(folder, filename), on_progress, cancel_event,
+                             original=original, reserve_name=True)
 
 
 class DownloadJob(object):

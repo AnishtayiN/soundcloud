@@ -174,6 +174,8 @@ def test_util():
           util.safe_filename("a/b\\c:d*e?f") == "a_b_c_d_e_f",
           util.safe_filename("a/b\\c:d*e?f"))
     check("safe_filename keeps persian", util.safe_filename("آهنگ تست") == "آهنگ تست")
+    check("Windows reserved filename", util.safe_filename("CON") == "_CON")
+    check("source assets path", os.path.isfile(util.resource_path("assets", "icon.png")))
     check("safe_filename never empty", util.safe_filename("   ") == "track")
     check("human_size", util.human_size(1536) == "1.5 KB", util.human_size(1536))
     check("human_count", util.human_count(1234567) == "1.2M", util.human_count(1234567))
@@ -350,6 +352,16 @@ def test_media_regressions():
             check("truncated audio rejected", False)
         except IOError:
             check("truncated audio rejected", True)
+        original = FakeSession({base: FakeResponse(content=b"RIFF" + b"\x00"*4 + b"WAVE" + b"x"*6000)})
+        path_wav = Downloader(original).download_track(base, folder, "original.mp3", original=True)
+        check("original WAV keeps the correct extension", path_wav.endswith(".wav"))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            downloader = Downloader(session)
+            futures = [pool.submit(downloader.download_track, base, folder, "same.mp3") for _ in range(2)]
+            concurrent_paths = [f.result() for f in futures]
+        check("concurrent downloads cannot overwrite each other", len(set(concurrent_paths)) == 2)
+        check("all partials cleaned up", not [p for p in os.listdir(folder) if p.endswith(".part")])
         store = Store(os.path.join(folder, "settings.json"))
         routes = make_routes()
         opaque = "https://api-v2.soundcloud.com/media/opaque/encoded/hls"

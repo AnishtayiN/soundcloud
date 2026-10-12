@@ -25,7 +25,7 @@ import java.util.zip.GZIPInputStream;
  * SoundCloud client.
  *
  * Everything is done with the Android framework only (HttpURLConnection +
- * org.json), so the app has no third party dependency at all.
+ * org.json). Media playback is handled separately by bundled Media3.
  *
  * The public SoundCloud HTML5 API needs a "client_id" that SoundCloud rotates.
  * This class: (1) re-uses the last working id, (2) discovers a fresh one by
@@ -631,7 +631,7 @@ public final class ScApi {
     /**
      * @param original when true the original (best quality) file is requested,
      *                 which needs a signed in account and a downloadable track.
-     * @return direct url of the file that can be handed to DownloadManager.
+     * @return direct file or MP3 HLS URL for the owned DownloadService.
      */
     public static String downloadUrl(Context ctx, Track track, boolean original) throws IOException {
         if (!original) return streamUrl(ctx, track);

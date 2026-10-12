@@ -51,12 +51,11 @@ class Store(object):
     def save(self):
         with self._lock:
             try:
+                os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
                 tmp = self.path + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as fh:
                     json.dump(self.data, fh, ensure_ascii=False, indent=1)
-                if os.path.exists(self.path):
-                    os.remove(self.path)
-                os.rename(tmp, self.path)
+                os.replace(tmp, self.path)
             except Exception:
                 pass
 

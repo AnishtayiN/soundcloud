@@ -80,3 +80,14 @@ def audio_header(data, mp3_only=False):
         return False
     return (data.startswith((b"RIFF", b"fLaC", b"OggS", b"FORM")) or
             len(data) >= 12 and data[4:8] == b"ftyp")
+
+
+def audio_extension(data, fallback=".mp3"):
+    for magic, suffix in ((b"RIFF", ".wav"), (b"fLaC", ".flac"), (b"OggS", ".ogg"), (b"FORM", ".aiff")):
+        if data.startswith(magic):
+            return suffix
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return ".m4a"
+    if audio_header(data, mp3_only=True):
+        return ".mp3"
+    return fallback

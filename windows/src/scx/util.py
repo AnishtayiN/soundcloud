@@ -11,7 +11,7 @@ def app_dir():
     """Folder that contains the exe (frozen) or the source tree."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def resource_path(*parts):
@@ -31,6 +31,8 @@ def safe_filename(name, max_length=110):
     name = name.rstrip(". ")
     if len(name) > max_length:
         name = name[:max_length].rstrip()
+    if name.split(".", 1)[0].upper() in {"CON", "PRN", "AUX", "NUL"} | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}:
+        name = "_" + name
     return name or "track"
 
 

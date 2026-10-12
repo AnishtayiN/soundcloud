@@ -875,7 +875,8 @@ class App(ctk.CTk):
                     self.ui_queue.put(("download", job))
             path = self.downloader.download_track(url, job.folder, job.filename,
                                                   on_progress=progress,
-                                                  cancel_event=job.cancel_event)
+                                                  cancel_event=job.cancel_event, original=job.original)
+            job.filename = os.path.basename(path)
             job.path = path
             job.state = "done"
             job.done = os.path.getsize(path)
