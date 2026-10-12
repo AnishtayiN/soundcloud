@@ -35,19 +35,32 @@ try {
     # Also exercise ordinary double-click startup, not just diagnostic mode.
     $normal = Start-Process -FilePath $Exe -WorkingDirectory $clean -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $window = $null
     do {
-        Start-Sleep -Milliseconds 200
+        Start-Sleep -Milliseconds 300
         $normal.Refresh()
         if ($normal.HasExited) { throw "Normal startup exited unexpectedly ($($normal.ExitCode))" }
-    } while ($normal.MainWindowHandle -eq 0 -and [DateTime]::UtcNow -lt $deadline)
-    if ($normal.MainWindowHandle -eq 0) { $normal.Kill(); throw 'Normal startup created no window' }
-    if (-not $normal.CloseMainWindow()) { $normal.Kill(); throw 'App window did not accept Close' }
+        # A one-file bootloader extracts resources in a parent process; the
+        # actual Tk window belongs to its child. Inspect BOTH, not only parent.
+        if ($normal.MainWindowHandle -ne 0) { $window = $normal }
+        if ($null -eq $window) {
+            Get-CimInstance Win32_Process -Filter "ParentProcessId = $($normal.Id)" | ForEach-Object {
+                $child = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+                if ($child -and $child.MainWindowHandle -ne 0) { $window = $child }
+            }
+        }
+    } while ($null -eq $window -and [DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $window) { taskkill /PID $normal.Id /T /F; throw 'Normal startup created no window' }
+    if (-not $window.CloseMainWindow()) { taskkill /PID $normal.Id /T /F; throw 'App window did not accept Close' }
     if (-not $normal.WaitForExit(60000)) { $normal.Kill(); throw 'Application did not shut down cleanly' }
     $normal.Refresh()
     if ($normal.ExitCode -ne 0) { throw "Normal window exited with $($normal.ExitCode)" }
     $result | Add-Member -NotePropertyName normal_startup_and_close -NotePropertyValue $true
     $result | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $Report
     Write-Host 'PASS: embedded runtime, actual themed window, images, audio, normal launch and shutdown.'
+} catch {
+    Write-Host ("::error title=Windows launch check::" + $_.Exception.Message)
+    throw
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
     Remove-Item -Recurse -Force $clean -ErrorAction SilentlyContinue

@@ -90,8 +90,14 @@ class Downloader(object):
         target_path = os.path.abspath(target_path)
         if reserve_name:
             target_path = self._reserve(target_path)
-        fd, part = tempfile.mkstemp(prefix=os.path.basename(target_path) + ".", suffix=".part", dir=folder or ".")
-        os.close(fd)
+        try:
+            fd, part = tempfile.mkstemp(prefix=os.path.basename(target_path) + ".", suffix=".part", dir=folder or ".")
+            os.close(fd)
+        except OSError:
+            if reserve_name:
+                with self._name_lock:
+                    self._reserved.discard(target_path)
+            raise
         response = None
         started, done = time.monotonic(), 0
 
@@ -107,6 +113,8 @@ class Downloader(object):
                 raise IOError("the server sent an empty audio file")
             is_hls = first.lstrip(b"\xef\xbb\xbf \r\n").startswith(b"#EXTM3U")
             if is_hls:
+                if original:
+                    raise IOError("original endpoint returned a playlist, not a source file")
                 text = self._read_playlist(itertools.chain([first], chunks), cancel_event)
                 _close(response)
                 response = None

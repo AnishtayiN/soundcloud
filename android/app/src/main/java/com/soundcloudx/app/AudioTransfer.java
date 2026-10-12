@@ -136,6 +136,7 @@ public final class AudioTransfer {
             byte[] p = prefix(in);
             String start = new String(p, StandardCharsets.UTF_8).replace("\uFEFF", "").trim();
             if (start.startsWith("#EXTM3U")) {
+                if (original) throw new IOException("original endpoint returned a playlist, not a source file");
                 text = playlist(in, p, cancel);
             } else {
                 String type = c.getContentType();

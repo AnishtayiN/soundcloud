@@ -198,11 +198,8 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     protected void onStart() {
         super.onStart();
         IntentFilter filter = new IntentFilter(PlayerService.STATE_CHANGED);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(stateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(stateReceiver, filter);
-        }
+        androidx.core.content.ContextCompat.registerReceiver(this, stateReceiver, filter,
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         ScApi.refreshCookies(this);
         updateAccountLabel();
         syncFromService();
