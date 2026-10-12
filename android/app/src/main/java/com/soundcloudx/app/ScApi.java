@@ -4,6 +4,7 @@ import android.content.Context;
 import android.text.TextUtils;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -408,6 +409,21 @@ public final class ScApi {
     //  search / charts / resolve
     // =======================================================================
 
+    /**
+     * Parses an api-v2 answer. org.json's checked JSONException is converted
+     * into an IOException so callers only have to deal with one exception type.
+     */
+    private static JSONObject parseJson(String body) throws IOException {
+        if (TextUtils.isEmpty(body)) {
+            throw new IOException("empty answer from SoundCloud");
+        }
+        try {
+            return new JSONObject(body);
+        } catch (JSONException e) {
+            throw new IOException("malformed answer from SoundCloud: " + e.getMessage(), e);
+        }
+    }
+
     public static List<Track> search(Context ctx, String query, int limit, int offset) throws IOException {
         if (!TextUtils.isEmpty(query) && query.startsWith("http")) {
             return resolveUrl(ctx, query.trim());
@@ -416,7 +432,7 @@ public final class ScApi {
                 + "&client_id=" + enc(clientId(ctx))
                 + "&limit=" + limit + "&offset=" + offset
                 + "&app_locale=en&linked_partitioning=1";
-        JSONObject json = new JSONObject(httpGet(ctx, url, true));
+        JSONObject json = parseJson(httpGet(ctx, url, true));
         return collection(json);
     }
 
@@ -424,7 +440,7 @@ public final class ScApi {
         String url = API_V2 + "/charts?kind=trending&genre=soundcloud:genres:" + enc(genreSlug)
                 + "&limit=" + limit + "&client_id=" + enc(clientId(ctx))
                 + "&app_locale=en";
-        JSONObject json = new JSONObject(httpGet(ctx, url, true));
+        JSONObject json = parseJson(httpGet(ctx, url, true));
         List<Track> out = new ArrayList<>();
         JSONArray col = json.optJSONArray("collection");
         if (col != null) {
@@ -446,7 +462,7 @@ public final class ScApi {
     /** Resolves a SoundCloud URL (track or playlist) into tracks. */
     public static List<Track> resolveUrl(Context ctx, String url) throws IOException {
         String api = API_V2 + "/resolve?url=" + enc(url) + "&client_id=" + enc(clientId(ctx));
-        JSONObject json = new JSONObject(httpGet(ctx, api, true));
+        JSONObject json = parseJson(httpGet(ctx, api, true));
         return fromResolved(json);
     }
 
@@ -476,7 +492,7 @@ public final class ScApi {
     /** Downloads a single track object (adds download_url / track_authorization). */
     public static Track getTrack(Context ctx, long id) throws IOException {
         String url = API_V2 + "/tracks/" + id + "?client_id=" + enc(clientId(ctx));
-        return Track.fromJson(new JSONObject(httpGet(ctx, url, true)));
+        return Track.fromJson(parseJson(httpGet(ctx, url, true)));
     }
 
     private static List<Track> collection(JSONObject json) {
@@ -570,7 +586,12 @@ public final class ScApi {
                 return (nl > 0 ? trimmed.substring(0, nl) : trimmed).trim();
             }
             if (trimmed.startsWith("{")) {
-                JSONObject json = new JSONObject(trimmed);
+                JSONObject json;
+                try {
+                    json = new JSONObject(trimmed);
+                } catch (JSONException broken) {
+                    return null;
+                }
                 String direct = json.optString("url", "");
                 if (!TextUtils.isEmpty(direct) && direct.startsWith("http")) {
                     return direct;
