@@ -159,13 +159,36 @@ jobs:
 
       - name: Sanity check the APK
         run: |
+          set -e
           APK=$(find dist -name "*.apk" | head -1)
-          echo "APK: ${APK} ($(du -h "${APK}" | cut -f1))"
-          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt 2>/dev/null | sort | tail -1)
+          SIZE=$(du -h "${APK}" | cut -f1)
+          echo "APK: ${APK} (${SIZE})"
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort | tail -1)
+          AAPT=$(find "$BUILD_TOOLS" -name aapt -type f 2>/dev/null | head -1)
+          # aapt2 is always there, aapt sometimes is not
+          BADGING=""
           if [ -n "${AAPT}" ]; then
-            "${AAPT}" dump badging "${APK}" | grep -E "package:|sdkVersion|targetSdkVersion" || true
+            BADGING=$("${AAPT}" dump badging "${APK}" 2>/dev/null | grep -E "^(package:|sdkVersion:|targetSdkVersion:|application-label:)" | tr '\n' '~')
           else
-            "$ANDROID_HOME/build-tools"/*/aapt dump badging "${APK}" | head -5 || true
+            BADGING=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}" 2>/dev/null | grep -E "^(package:|sdkVersion:|targetSdkVersion:|application-label:)" | tr '\n' '~')
+          fi
+          echo "::notice title=APK ${SIZE}::${BADGING}"
+          # the APK has to be signed, otherwise Android refuses to install it
+          SIGNER=$(find "$BUILD_TOOLS" -name apksigner -type f 2>/dev/null | head -1)
+          if [ -n "${SIGNER}" ]; then
+            SIGNED=$("${SIGNER}" verify --print-certs "${APK}" 2>&1 | tr '\n' '~' | cut -c1-900)
+            if "${SIGNER}" verify "${APK}" >/dev/null 2>&1; then
+              echo "::notice title=APK signature::${SIGNED}"
+            else
+              echo "::error title=APK signature::the APK is not signed: ${SIGNED}"
+              exit 1
+            fi
+          else
+            echo "::warning title=apksigner::not found in ${BUILD_TOOLS}"
+          fi
+          # the release apk must not be the debuggable one
+          if unzip -p "${APK}" AndroidManifest.xml 2>/dev/null | grep -q "android:debuggable"; then
+            echo "::warning title=APK::the manifest mentions debuggable"
           fi
 
       - uses: actions/upload-artifact@v4
