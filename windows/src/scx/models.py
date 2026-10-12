@@ -8,7 +8,7 @@ class Track(object):
     __slots__ = (
         "id", "title", "artist", "duration", "artwork_url", "permalink_url",
         "genre", "playback_count", "streamable", "downloadable", "policy",
-        "track_authorization", "download_url", "stream_url", "created_at",
+        "track_authorization", "download_url", "stream_url", "created_at", "transcodings",
     )
 
     def __init__(self, **kwargs):
@@ -27,6 +27,7 @@ class Track(object):
         self.download_url = kwargs.get("download_url") or ""
         self.stream_url = kwargs.get("stream_url") or ""
         self.created_at = kwargs.get("created_at") or ""
+        self.transcodings = kwargs.get("transcodings") or []
 
     # ------------------------------------------------------------------ api --
     @classmethod
@@ -48,7 +49,8 @@ class Track(object):
             downloadable=data.get("downloadable", False),
             policy=data.get("policy", "ALLOW"),
             track_authorization=data.get("track_authorization"),
-            download_url="",
+            download_url=data.get("download_url") or "",
+            transcodings=(data.get("media") or {}).get("transcodings") or [],
         )
         return track if track.id else None
 
@@ -85,7 +87,7 @@ class Track(object):
         if not self.artwork_url:
             return ""
         # 200x200 does not exist for every upload, "-large" (100x100) always does.
-        return self.artwork_url.replace("-large", "-t200x200")
+        return self.artwork_url.replace("-large", "-t300x300")
 
     @property
     def subtitle(self):

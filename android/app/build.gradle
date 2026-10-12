@@ -3,7 +3,7 @@ plugins {
 }
 
 // Version can be overridden from CI:  -PappVersionName=1.2.3 -PappVersionCode=12
-def appVersionName = (project.findProperty("appVersionName") ?: "1.0.0").toString()
+def appVersionName = (project.findProperty("appVersionName") ?: "1.0.1").toString()
 def appVersionCode = (project.findProperty("appVersionCode") ?: "1").toString().toInteger()
 
 android {
@@ -16,6 +16,7 @@ android {
         targetSdk 34
         versionCode appVersionCode
         versionName appVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += ["fa", "en"]
     }
 
@@ -59,8 +60,8 @@ android {
     }
 
     lint {
-        abortOnError false
-        checkReleaseBuilds false
+        abortOnError true
+        checkReleaseBuilds true
     }
 
     applicationVariants.all { variant ->
@@ -71,7 +72,13 @@ android {
 }
 
 dependencies {
-    // Intentionally no external dependencies: the app uses only the Android
-    // framework (HttpURLConnection + org.json + WebView), which keeps the APK
-    // small (~1 MB) and makes the build 100% reproducible offline.
+    // Real HLS/progressive playback engine, bundled in the APK (not a website
+    // shortcut and not a downloader that fetches its runtime on first launch).
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.4.1'
+    implementation 'androidx.core:core:1.13.1'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:core:1.6.1'
 }

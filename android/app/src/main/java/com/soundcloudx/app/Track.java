@@ -5,6 +5,9 @@ import android.text.TextUtils;
 import org.json.JSONObject;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+import org.json.JSONArray;
 
 /** One SoundCloud track. */
 public class Track implements Serializable {
@@ -24,6 +27,9 @@ public class Track implements Serializable {
     public String policy = "ALLOW";
     public String trackAuth = "";
     public String downloadUrl = "";
+    public final List<String> progressiveUrls = new ArrayList<>();
+    public final List<String> hlsUrls = new ArrayList<>();
+    public boolean hasMedia;
 
     public static Track fromJson(JSONObject o) {
         if (o == null) {
@@ -42,6 +48,21 @@ public class Track implements Serializable {
         t.trackAuth = str(o.optString("track_authorization", ""));
         t.downloadUrl = str(o.optString("download_url", ""));
 
+        JSONObject media = o.optJSONObject("media");
+        JSONArray transcodings = media == null ? null : media.optJSONArray("transcodings");
+        t.hasMedia = transcodings != null && transcodings.length() > 0;
+        if (transcodings != null) {
+            for (int i = 0; i < transcodings.length(); i++) {
+                JSONObject item = transcodings.optJSONObject(i);
+                if (item == null || item.optBoolean("snipped", false)) continue;
+                JSONObject format = item.optJSONObject("format");
+                if (format == null || !format.optString("mime_type").contains("mpeg")) continue;
+                String url = item.optString("url");
+                if (!url.startsWith("https://api-v2.soundcloud.com/") || url.contains("/preview/")) continue;
+                if ("progressive".equals(format.optString("protocol"))) t.progressiveUrls.add(url);
+                if ("hls".equals(format.optString("protocol"))) t.hlsUrls.add(url);
+            }
+        }
         JSONObject user = o.optJSONObject("user");
         if (user != null) {
             t.artist = str(user.optString("username", ""));
@@ -101,7 +122,7 @@ public class Track implements Serializable {
 
     /** Large cover for the player bar. */
     public String coverUrl() {
-        return artworkUrl.replace("-large", "-t200x200");
+        return artworkUrl.replace("-large", "-t300x300");
     }
 
     public boolean isPrivate() {

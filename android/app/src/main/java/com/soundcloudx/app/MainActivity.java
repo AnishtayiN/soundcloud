@@ -86,6 +86,7 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     private String query = "";
     private int offset;
     private boolean loading;
+    private int queryToken;
     private boolean hasMore;
     private boolean userSeeking;
     private int lastState = PlayerService.STATE_IDLE;
@@ -176,13 +177,7 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
 
         editSearch.setText(prefs.lastQuery());
 
-        // Mark the service as started (needed for background playback) and bind
-        // to it so the UI can read the current state.
-        try {
-            startService(new Intent(this, PlayerService.class));
-        } catch (Throwable t) {
-            ScLog.e("startService failed", t);
-        }
+        // Bind while idle; the service becomes started/foreground on Play.
         bindService(new Intent(this, PlayerService.class), connection, Context.BIND_AUTO_CREATE);
 
         Art.trimCache(this, 400);
@@ -203,7 +198,11 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     protected void onStart() {
         super.onStart();
         IntentFilter filter = new IntentFilter(PlayerService.STATE_CHANGED);
-        registerReceiver(stateReceiver, filter);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(stateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(stateReceiver, filter);
+        }
         ScApi.refreshCookies(this);
         updateAccountLabel();
         syncFromService();
@@ -221,6 +220,7 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        queryToken++;
         ui.removeCallbacksAndMessages(null);
         if (bound) {
             try {
@@ -410,7 +410,7 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
                                 showDownloads();
                                 return true;
                             case 3:
-                                ScApi.clearClientId();
+                                ScApi.clearClientId(MainActivity.this);
                                 toast(R.string.toast_client_id_reloaded);
                                 return true;
                             case 4:
@@ -464,6 +464,9 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     }
 
     private void showFavorites() {
+        queryToken++;
+        loading = false;
+        showLoading(false);
         mode = MODE_FAVORITES;
         List<Track> favorites = prefs.favorites();
         tracks.clear();
@@ -487,9 +490,8 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     }
 
     private void runQuery(final boolean append) {
-        if (loading) {
-            return;
-        }
+        if (loading && append) return;
+        final int token = ++queryToken;
         loading = true;
         showLoading(true);
         final String currentMode = mode;
@@ -503,11 +505,12 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
                 if (MODE_SEARCH.equals(currentMode)) {
                     return ScApi.search(MainActivity.this, currentQuery, 30, currentOffset);
                 }
-                return ScApi.charts(MainActivity.this, ScApi.GENRE_SLUGS[genreIndex], 30);
+                return ScApi.charts(MainActivity.this, ScApi.GENRE_SLUGS[genreIndex], 30, currentOffset);
             }
         }, new Bg.Then<List<Track>>() {
             @Override
             public void done(List<Track> result, Exception error) {
+                if (token != queryToken || isFinishing() || isDestroyed()) return;
                 loading = false;
                 showLoading(false);
                 if (error != null) {
@@ -566,22 +569,14 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
             return;
         }
         toast(R.string.toast_download_started);
-        Bg.run(new Bg.Job<Downloader.Result>() {
-            @Override
-            public Downloader.Result run() throws Exception {
-                String url = ScApi.downloadUrl(MainActivity.this, track, original);
-                return Downloader.enqueue(MainActivity.this, track, url, original);
-            }
-        }, new Bg.Then<Downloader.Result>() {
-            @Override
-            public void done(Downloader.Result result, Exception error) {
-                if (error != null) {
-                    ScLog.e("download failed", error);
-                    toast(getString(R.string.toast_download_failed,
-                            error.getMessage() == null ? "?" : error.getMessage()));
-                }
-            }
-        });
+        try {
+            // Promote immediately while the user is in the app. URL discovery
+            // and transfer are done by DownloadService, also after leaving UI.
+            Downloader.enqueue(this, track, null, original);
+        } catch (Exception error) {
+            ScLog.e("download failed", error);
+            toast(getString(R.string.toast_download_failed, error.getMessage()));
+        }
     }
 
     @Override
@@ -899,7 +894,14 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
             ids[i] = o == null ? 0 : o.optLong("id");
             String name = o == null ? "" : o.optString("title", "");
             String state = "";
-            if (dm != null && ids[i] != 0) {
+            String ownState = o == null ? "" : o.optString("state");
+            if (!TextUtils.isEmpty(ownState)) {
+                long done = o.optLong("done"), total = o.optLong("total");
+                if ("done".equals(ownState)) state = "✔ " + Fmt.bytes(done);
+                else if ("failed".equals(ownState)) state = "✖ " + o.optString("error");
+                else if ("cancelled".equals(ownState)) state = getString(R.string.download_cancelled);
+                else state = "… " + (total > 0 ? (100 * done / total) + "%" : Fmt.bytes(done));
+            } else if (dm != null && ids[i] != 0) {
                 Cursor c = null;
                 try {
                     c = dm.query(new DownloadManager.Query().setFilterById(ids[i]));
@@ -940,7 +942,28 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
                 .show();
     }
 
-    private void openDownload(long id) {
+    private void openDownload(final long id) {
+        JSONObject own = prefs.download(id);
+        if (own != null && !TextUtils.isEmpty(own.optString("state"))) {
+            String state = own.optString("state");
+            if ("queued".equals(state) || "running".equals(state)) {
+                new AlertDialog.Builder(this).setTitle(R.string.menu_downloads)
+                        .setMessage(own.optString("title"))
+                        .setPositiveButton(R.string.download_cancel, (dialog, which) -> {
+                            Intent cancel = new Intent(this, DownloadService.class);
+                            cancel.putExtra("cancel", id);
+                            startService(cancel);
+                        }).setNegativeButton(R.string.dlg_close, null).show();
+            } else if ("done".equals(state)) {
+                try {
+                    Intent view = new Intent(Intent.ACTION_VIEW);
+                    view.setDataAndType(Uri.parse(own.optString("uri")), own.optString("mime", "audio/mpeg"));
+                    view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(view);
+                } catch (RuntimeException error) { toast(R.string.download_no_player); }
+            } else toast(own.optString("error", getString(R.string.download_cancelled)));
+            return;
+        }
         DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
         if (dm == null || id == 0) {
             return;
@@ -967,7 +990,7 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
         } catch (Throwable ignored) {
         }
         ScApi.refreshCookies(this);
-        ScApi.clearClientId();
+        ScApi.clearClientId(MainActivity.this);
         updateAccountLabel();
         toast(R.string.menu_logout);
     }

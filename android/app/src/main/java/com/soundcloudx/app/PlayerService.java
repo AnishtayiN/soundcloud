@@ -12,7 +12,13 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
-import android.media.MediaPlayer;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.Player;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Binder;
@@ -30,11 +36,12 @@ import java.util.List;
  * Playing in the background is a hard requirement, so this service
  *   * runs as a foreground service with a media-style notification,
  *   * owns a MediaSession (lock screen / bluetooth / headset buttons),
- *   * streams the 128 kbps progressive mp3 coming from {@link ScApi}.
+ *   * streams complete MP3/progressive/HLS with bundled Media3.
  *
  * The queue and the play position live here, the UI only talks to it through
  * {@link LocalBinder} (when bound) or through start commands (notifications).
  */
+@androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
 public class PlayerService extends Service {
 
     // ------------------------------------------------------------- commands --
@@ -89,7 +96,7 @@ public class PlayerService extends Service {
 
     private final LocalBinder binder = new LocalBinder();
 
-    private MediaPlayer player;
+    private ExoPlayer player;
     private MediaSession session;
     private AudioManager audio;
     private AudioAttributes audioAttributes;
@@ -131,11 +138,11 @@ public class PlayerService extends Service {
                         pause();
                     } else if (change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
                         if (player != null) {
-                            player.setVolume(0.3f, 0.3f);
+                            player.setVolume(0.3f);
                         }
                     } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
                         if (player != null) {
-                            player.setVolume(1f, 1f);
+                            player.setVolume(1f);
                         }
                     }
                 }
@@ -185,19 +192,20 @@ public class PlayerService extends Service {
             // A foreground service started through startForegroundService() has
             // to post its notification quickly (Android 8+), so we always do it
             // here and only take it down again when nothing is queued.
-            showNotification();
-            if (state == STATE_IDLE) {
+            if (state != STATE_IDLE) {
+                showNotification();
+            } else {
                 stopForegroundCompat();
                 stopSelf();
             }
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
-        if (!isPlaying()) {
+        if (state == STATE_IDLE || state == STATE_ERROR) {
             stopSelf();
         }
     }
@@ -206,7 +214,9 @@ public class PlayerService extends Service {
     public void onDestroy() {
         ScLog.d("PlayerService destroyed");
         Bg.MAIN.removeCallbacks(ticker);
+        loadToken++;
         releasePlayer();
+        abandonFocus();
         if (session != null) {
             session.setActive(false);
             session.release();
@@ -244,7 +254,7 @@ public class PlayerService extends Service {
 
     public int getPosition() {
         try {
-            return player == null ? 0 : player.getCurrentPosition();
+            return player == null ? 0 : (int) player.getCurrentPosition();
         } catch (Throwable t) {
             return 0;
         }
@@ -252,7 +262,7 @@ public class PlayerService extends Service {
 
     public int getDuration() {
         try {
-            int d = player == null ? 0 : player.getDuration();
+            int d = player == null ? 0 : (int) player.getDuration();
             if (d > 0) {
                 return d;
             }
@@ -321,9 +331,7 @@ public class PlayerService extends Service {
     public void pause() {
         if (player != null) {
             try {
-                if (player.isPlaying()) {
-                    player.pause();
-                }
+                player.pause();
             } catch (Throwable ignored) {
             }
         }
@@ -337,8 +345,9 @@ public class PlayerService extends Service {
     public void resume() {
         if (player != null) {
             try {
-                requestFocus();
-                player.start();
+                if (!requestFocus()) return;
+                playWhenReady = true;
+                player.play();
                 setState(STATE_PLAYING);
                 updateSessionState();
                 showNotification();
@@ -384,7 +393,7 @@ public class PlayerService extends Service {
             playCurrent(true);
             return true;
         }
-        setState(STATE_PAUSED);
+        pause();
         return false;
     }
 
@@ -402,6 +411,7 @@ public class PlayerService extends Service {
     }
 
     public void stop() {
+        loadToken++;
         releasePlayer();
         current = null;
         currentIndex = -1;
@@ -496,6 +506,13 @@ public class PlayerService extends Service {
         setState(STATE_LOADING);
         final int token = ++loadToken;
         releasePlayer();
+        Intent started = new Intent(this, PlayerService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(started);
+        } else {
+            startService(started);
+        }
+        showNotification(); // Before URL discovery; never miss the FGS deadline.
 
         Bg.run(new Bg.Job<String>() {
             @Override
@@ -513,59 +530,53 @@ public class PlayerService extends Service {
                     return;
                 }
                 try {
-                    MediaPlayer mp = new MediaPlayer();
-                    mp.setAudioAttributes(audioAttributes);
-                    mp.setWakeMode(PlayerService.this, PowerManager.PARTIAL_WAKE_LOCK);
-                    mp.setDataSource(url);
-                    mp.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                        @Override
-                        public void onPrepared(MediaPlayer mp) {
-                            if (token != loadToken) {
-                                try {
-                                    mp.release();
-                                } catch (Throwable ignored) {
-                                }
-                                return;
-                            }
-                            if (playWhenReady) {
-                                if (!requestFocus()) {
-                                    return;
-                                }
-                                mp.start();
-                                setState(STATE_PLAYING);
-                                startTicker();
-                            } else {
-                                setState(STATE_PAUSED);
-                            }
-                            updateSessionState();
-                            showNotification();
-                            autoSkip = 0;
-                        }
-                    });
-                    mp.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-                        @Override
-                        public void onCompletion(MediaPlayer mp) {
-                            if (token != loadToken) {
-                                return;
-                            }
-                            if (!next()) {
-                                setState(STATE_PAUSED);
-                                updateSessionState();
-                                showNotification();
-                            }
-                        }
-                    });
-                    mp.setOnErrorListener(new MediaPlayer.OnErrorListener() {
-                        @Override
-                        public boolean onError(MediaPlayer mp, int what, int extra) {
-                            if (token == loadToken) {
-                                fail(new IllegalStateException("media error " + what + "/" + extra));
-                            }
-                            return true;
-                        }
-                    });
+                    DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                            .setUserAgent(ScApi.UA).setConnectTimeoutMs(15000).setReadTimeoutMs(25000);
+                    final ExoPlayer mp = new ExoPlayer.Builder(PlayerService.this)
+                            .setMediaSourceFactory(new DefaultMediaSourceFactory(http)).build();
                     player = mp;
-                    mp.prepareAsync();
+                    mp.setAudioAttributes(new androidx.media3.common.AudioAttributes.Builder()
+                            .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                            .build(), false); // Focus handled by this service.
+                    mp.setHandleAudioBecomingNoisy(true);
+                    mp.setWakeMode(C.WAKE_MODE_LOCAL);
+                    mp.addListener(new Player.Listener() {
+                        @Override
+                        public void onPlaybackStateChanged(int playbackState) {
+                            if (token != loadToken || player != mp) return;
+                            if (playbackState == Player.STATE_READY) {
+                                autoSkip = 0;
+                                if (playWhenReady && requestFocus()) {
+                                    mp.play();
+                                    setState(STATE_PLAYING);
+                                } else {
+                                    playWhenReady = false;
+                                    setState(STATE_PAUSED);
+                                }
+                                startTicker();
+                                showNotification();
+                            } else if (playbackState == Player.STATE_BUFFERING) {
+                                setState(STATE_LOADING);
+                            } else if (playbackState == Player.STATE_ENDED) {
+                                next();
+                            }
+                        }
+
+                        @Override
+                        public void onIsPlayingChanged(boolean playing) {
+                            if (token != loadToken || player != mp) return;
+                            if (playing) setState(STATE_PLAYING);
+                            else if (mp.getPlaybackState() == Player.STATE_READY) setState(STATE_PAUSED);
+                            showNotification();
+                        }
+
+                        @Override
+                        public void onPlayerError(PlaybackException error) {
+                            if (token == loadToken && player == mp) fail(error);
+                        }
+                    });
+                    mp.setMediaItem(MediaItem.fromUri(url));
+                    mp.prepare();
                 } catch (Throwable t) {
                     fail(t instanceof Exception ? (Exception) t : new IllegalStateException(t));
                 }
@@ -576,6 +587,8 @@ public class PlayerService extends Service {
     private void fail(Exception error) {
         message = describe(error);
         ScLog.e("playback failed: " + message, error);
+        releasePlayer();
+        abandonFocus();
         setState(STATE_ERROR);
         updateSessionState();
         stopForegroundCompat();
@@ -607,7 +620,7 @@ public class PlayerService extends Service {
         Bg.MAIN.removeCallbacks(ticker);
         if (player != null) {
             try {
-                player.reset();
+                player.stop();
             } catch (Throwable ignored) {
             }
             try {
@@ -625,6 +638,7 @@ public class PlayerService extends Service {
 
     private void broadcastState() {
         Intent i = new Intent(STATE_CHANGED);
+        i.setPackage(getPackageName());
         i.putExtra(EXTRA_STATE, state);
         i.putExtra(EXTRA_MESSAGE, message);
         i.putExtra(EXTRA_PLAYING, isPlaying());
@@ -640,6 +654,7 @@ public class PlayerService extends Service {
 
     private void broadcastProgress() {
         Intent i = new Intent(STATE_CHANGED);
+        i.setPackage(getPackageName());
         i.putExtra(EXTRA_STATE, state);
         i.putExtra(EXTRA_DURATION, getDuration());
         i.putExtra("position", getPosition());
@@ -855,10 +870,11 @@ public class PlayerService extends Service {
         try {
             startForeground(NOTIF_ID, notification);
         } catch (Throwable t) {
-            // Android 12+ can refuse a foreground start coming from the
-            // background; the audio keeps playing, only the notification stays.
             ScLog.e("startForeground refused", t);
-            nm.notify(NOTIF_ID, notification);
+            releasePlayer();
+            message = "background playback permission refused";
+            setState(STATE_ERROR);
+            stopSelf();
         }
     }
 

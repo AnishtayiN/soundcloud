@@ -1,21 +1,15 @@
 name: Build & Release
 
-# ---------------------------------------------------------------- triggers ---
-# * "Run workflow" button  -> builds and publishes a release right away
-# * every push to main     -> builds and publishes a release
-# * push of a v* tag       -> builds and publishes that version
-# * pull requests          -> builds only (APK + EXE are kept as artifacts)
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version name for the release (leave empty for 1.0.<run number>)"
+        description: "Release version (major.minor.patch; empty = 1.0.<run number>)"
         required: false
         default: ""
       prerelease:
-        description: "Mark the release as a pre-release"
+        description: "Publish as a pre-release"
         type: boolean
-        required: false
         default: false
   push:
     branches: [main]
@@ -25,308 +19,307 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: soundcloudx-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # =========================================================== Android ========
-  android:
-    name: Android APK (7.0 - 16)
+  version:
     runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.version.outputs.name }}
+      code: ${{ steps.version.outputs.code }}
     steps:
       - uses: actions/checkout@v4
+      - id: version
+        name: Validate release version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python3 tools/resolve_version.py >> "$GITHUB_OUTPUT"
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+  android:
+    name: Build full Android app
+    needs: version
+    runs-on: ubuntu-latest
+    outputs:
+      signing: ${{ steps.sign.outputs.signing }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
-      # The ubuntu runner images ship the Android SDK (build-tools, platforms,
-      # accepted licenses), so we only make sure the environment points at it.
-      # If something is missing Gradle downloads it during the build.
-      - name: Locate the Android SDK
-        run: |
-          set -e
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          if [ ! -d "$SDK" ]; then
-            echo "::error::no Android SDK on this runner"
-            exit 1
-          fi
-          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "SDK: $SDK"
-          ls "$SDK"
-          echo "--- platforms ---";  ls "$SDK/platforms" 2>/dev/null | tail -5
-          echo "--- build-tools ---"; ls "$SDK/build-tools" 2>/dev/null | tail -5
-          echo "--- licenses ---";   ls "$SDK/licenses" 2>/dev/null
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      - uses: android-actions/setup-android@v3
+      - name: Install build platform
+        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
-
-      - name: Create release signing key
-        working-directory: android
+      # Development key only. Production signing keys belong in repository
+      # secrets, never in Git or in an Actions cache. Cache eviction/re-scoping
+      # can replace this development key, so these builds are pre-releases.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.soundcloudx/development.keystore
+          key: scx-development-signing-v1-${{ github.ref_name }}
+      - name: Configure signing (persistent secret, or development pre-release)
+        id: sign
         env:
           KS_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          set -e
-          if [ -n "${KS_BASE64}" ]; then
-            echo "Using the keystore from the repository secrets."
-            printf '%s' "${KS_BASE64}" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "KEYSTORE_PASSWORD=${KS_PASSWORD}"   >> "$GITHUB_ENV"
-            echo "KEY_ALIAS=${KS_ALIAS}"               >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=${KS_KEY_PASSWORD}"     >> "$GITHUB_ENV"
+          set -euo pipefail
+          if [ -n "$KS_BASE64" ]; then
+            [ -n "$KS_PASSWORD" ] && [ -n "$KS_ALIAS" ] && [ -n "$KS_KEY_PASSWORD" ]
+            printf '%s' "$KS_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KS_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KS_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$KS_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo 'signing=production' >> "$GITHUB_OUTPUT"
           else
-            echo "No keystore secret found -> generating a temporary one."
-            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.keystore" \
-              -alias soundcloudx -keyalg RSA -keysize 2048 -validity 10950 \
-              -storepass soundcloudx -keypass soundcloudx \
-              -dname "CN=SoundCloud X, OU=Android, O=SoundCloud X, C=IR"
-            echo "KEYSTORE_PASSWORD=soundcloudx" >> "$GITHUB_ENV"
-            echo "KEY_ALIAS=soundcloudx"         >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=soundcloudx"      >> "$GITHUB_ENV"
+            mkdir -p "$HOME/.soundcloudx"
+            KEY="$HOME/.soundcloudx/development.keystore"
+            if [ ! -f "$KEY" ]; then
+              keytool -genkeypair -keystore "$KEY" -storetype JKS -alias soundcloudx \
+                -keyalg RSA -keysize 2048 -validity 10950 -storepass soundcloudx -keypass soundcloudx \
+                -dname 'CN=SoundCloud X development, O=SoundCloud X, C=IR'
+            fi
+            echo "KEYSTORE_FILE=$KEY" >> "$GITHUB_ENV"
+            echo 'KEYSTORE_PASSWORD=soundcloudx' >> "$GITHUB_ENV"
+            echo 'KEY_ALIAS=soundcloudx' >> "$GITHUB_ENV"
+            echo 'KEY_PASSWORD=soundcloudx' >> "$GITHUB_ENV"
+            echo 'signing=development' >> "$GITHUB_OUTPUT"
+            echo '::warning::Development signing: update compatibility is not guaranteed without a backed-up production keystore.'
           fi
-          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-
-      - name: Resolve version
-        id: ver
-        run: |
-          set -e
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-          fi
-          case "${VERSION}" in
-            *[!0-9.]*|"") VERSION="1.0.${{ github.run_number }}" ;;
-          esac
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${VERSION}"
-
-      - name: Build release APK
+      - name: Unit tests, lint and APKs
         working-directory: android
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
+          APP_CODE: ${{ needs.version.outputs.code }}
         run: |
-          # pipefail matters: the log is piped through tee, so without it a
-          # failing Gradle run would still leave the step green.
-          set -o pipefail
-          chmod +x ./gradlew
-          ls -l ./gradlew gradle/wrapper/gradle-wrapper.jar
-          ./gradlew --no-daemon --stacktrace :app:assembleRelease \
-            -PappVersionName="${{ steps.ver.outputs.version }}" \
-            -PappVersionCode="${{ github.run_number }}" 2>&1 | tee ../gradle-build.log
-
-      # Pulls the interesting part of the Gradle log out as annotations, which
-      # is the only part of the log that is reachable over the REST API.
-      - name: Show build errors
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:lintRelease \
+            :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest \
+            -PappVersionName="$APP_VERSION" -PappVersionCode="$APP_CODE" 2>&1 | tee ../gradle-build.log
+      - name: Verify and collect the exact release APK
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist test-builds
+          APK="android/app/build/outputs/apk/release/SoundCloudX-$APP_VERSION-release.apk"
+          test -s "$APK"
+          TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee dist/android-signature.txt
+          "$TOOLS/aapt" dump badging "$APK" | tee dist/android-package.txt
+          if grep -q 'application-debuggable' dist/android-package.txt; then exit 1; fi
+          grep -q "launchable-activity: name='com.soundcloudx.app.MainActivity'" dist/android-package.txt
+          python3 tools/check_apk.py "$APK"
+          cp "$APK" "dist/SoundCloudX-$APP_VERSION.apk"
+          cp "android/app/build/outputs/apk/debug/SoundCloudX-$APP_VERSION-debug.apk" test-builds/SoundCloudX-debug.apk
+          cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk test-builds/SoundCloudX-tests.apk
+          ls -lh dist/*.apk
+      - name: Show useful errors
         if: failure()
         run: |
-          LOG=gradle-build.log
-          if [ -f "$LOG" ]; then
-            tail -40 "$LOG" || true
-            ERRORS=$(grep -nE "error:|e: |FAILURE:|Execution failed|What went wrong|Caused by|Could not|Unsupported|AAPT|Unable to|No such|not found" "$LOG" | head -14 | tr '\n' '~')
-            if [ -n "${ERRORS}" ]; then
-              echo "::error title=Gradle errors::${ERRORS}"
-            fi
-            TAIL=$(tail -14 "$LOG" | tr '\n' '~')
-            echo "::error title=Gradle log tail::${TAIL}"
-          else
-            echo "::error title=Gradle log::no gradle-build.log was written"
+          if [ -f gradle-build.log ]; then
+            grep -E 'error:|FAILURE:|Execution failed|Caused by:|Error:' gradle-build.log | head -30 || true
+            tail -60 gradle-build.log
           fi
-
-      - name: Collect APK
-        run: |
-          mkdir -p dist
-          APK=""
-          while IFS= read -r candidate; do
-            echo "found: $candidate"
-            APK="$candidate"
-            break
-          done <<< "$(find android -name '*.apk' -type f 2>/dev/null)"
-          if [ -z "$APK" ]; then
-            echo "::error title=APK::no APK file was produced"
-            while IFS= read -r line; do
-              echo "::error title=Build tree::$line"
-            done <<< "$(find android/app/build -maxdepth 4 -print 2>/dev/null | head -40)"
-            exit 1
-          fi
-          cp "$APK" "dist/SoundCloudX-${{ steps.ver.outputs.version }}.apk"
-          ls -la dist
-
-      - name: Sanity check the APK
-        run: |
-          set -e
-          APK=$(find dist -name "*.apk" | head -1)
-          SIZE=$(du -h "${APK}" | cut -f1)
-          echo "APK: ${APK} (${SIZE})"
-          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort | tail -1)
-          AAPT=$(find "$BUILD_TOOLS" -name aapt -type f 2>/dev/null | head -1)
-          # aapt2 is always there, aapt sometimes is not
-          BADGING=""
-          if [ -n "${AAPT}" ]; then
-            BADGING=$("${AAPT}" dump badging "${APK}" 2>/dev/null | grep -E "^(package:|sdkVersion:|targetSdkVersion:|application-label:)" | tr '\n' '~')
-          else
-            BADGING=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}" 2>/dev/null | grep -E "^(package:|sdkVersion:|targetSdkVersion:|application-label:)" | tr '\n' '~')
-          fi
-          echo "::notice title=APK ${SIZE}::${BADGING}"
-          # the APK has to be signed, otherwise Android refuses to install it
-          SIGNER=$(find "$BUILD_TOOLS" -name apksigner -type f 2>/dev/null | head -1)
-          if [ -n "${SIGNER}" ]; then
-            SIGNED=$("${SIGNER}" verify --print-certs "${APK}" 2>&1 | tr '\n' '~' | cut -c1-900)
-            if "${SIGNER}" verify "${APK}" >/dev/null 2>&1; then
-              echo "::notice title=APK signature::${SIGNED}"
-            else
-              echo "::error title=APK signature::the APK is not signed: ${SIGNED}"
-              exit 1
-            fi
-          else
-            echo "::warning title=apksigner::not found in ${BUILD_TOOLS}"
-          fi
-          # the release apk must not be the debuggable one
-          if unzip -p "${APK}" AndroidManifest.xml 2>/dev/null | grep -q "android:debuggable"; then
-            echo "::warning title=APK::the manifest mentions debuggable"
-          fi
-
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: dist/*.apk
+          path: dist/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-test-builds
+          path: test-builds/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-build-reports
+          path: |
+            gradle-build.log
+            android/app/build/reports/
+            android/app/build/test-results/
 
-  # =========================================================== Windows ========
-  windows:
-    name: Windows EXE (7 - 11)
-    runs-on: windows-latest
+  android-runtime:
+    name: Android runtime (API ${{ matrix.api }})
+    needs: [version, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [24, 34, 36]
     steps:
       - uses: actions/checkout@v4
-
-      # Python 3.8 is the newest Python that still runs on Windows 7, so the
-      # exe stays compatible with 7 / 8 / 10 / 11.
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v5
+      - uses: actions/setup-java@v4
         with:
-          python-version: "3.8"
-          architecture: "x64"
-
-      - name: Resolve version
-        id: ver
-        shell: bash
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: release-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-test-builds
+          path: test-builds
+      - name: Enable KVM
         run: |
-          set -e
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-          fi
-          case "${VERSION}" in
-            *[!0-9.]*|"") VERSION="1.0.${{ github.run_number }}" ;;
-          esac
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${VERSION}"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install, launch/resume release and test real UI/storage/playback
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash tools/test_android.sh "release-apk/SoundCloudX-$APP_VERSION.apk" test-builds/SoundCloudX-debug.apk test-builds/SoundCloudX-tests.apk "runtime-reports/android-${{ matrix.api }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-runtime-${{ matrix.api }}
+          path: runtime-reports/
 
-      - name: Install dependencies
+  windows:
+    name: Self-contained Windows EXE and installer
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.8.10"
+          architecture: x64
+      - name: Install build dependencies (not required by end users)
         working-directory: windows
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-      - name: Write the version into the sources
-        run: python tools/bump_version.py "${{ steps.ver.outputs.version }}"
-
-      - name: Self test
+        run: python -m pip install -r requirements.txt
+      - name: Set version
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
+        run: python tools/bump_version.py "$env:APP_VERSION"
+      - name: Source logic and real UI tests
         working-directory: windows
-        run: python selftest.py
-
-      - name: Build EXE
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: python selftest.py --ui --require-ui
+      - name: Build bundled executable
         working-directory: windows
-        run: pyinstaller --noconfirm --clean SoundCloudX.spec
-
-      - name: Show build errors
-        if: failure()
-        shell: bash
+        run: python -m PyInstaller --noconfirm --clean SoundCloudX.spec
+      - name: Run the actual EXE without Python on PATH
+        run: ./tools/test_windows.ps1 -Exe windows/dist/SoundCloudX.exe -Report runtime-reports/windows-portable.json
+      - name: Build complete offline installer
+        working-directory: windows
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
         run: |
-          for log in windows/build/SoundCloudX/warn-SoundCloudX.txt windows/*.log; do
-            [ -f "$log" ] || continue
-            tail -25 "$log" | while IFS= read -r line; do echo "::error title=PyInstaller::${line}"; done
-          done
-          echo "::error title=Build::the PyInstaller build failed, see the log above"
-
-      - name: Collect EXE
-        shell: bash
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw 'Inno Setup is not installed on the build runner' }
+          & $iscc "/DAppVersion=$env:APP_VERSION" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - name: Install and test the installed copy, also without Python
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
         run: |
-          set -e
-          mkdir -p dist
-          cp windows/dist/SoundCloudX.exe dist/SoundCloudX.exe
-          ls -la dist
-
+          $dir = Join-Path $env:RUNNER_TEMP 'Installed SoundCloud X'
+          $setup = (Resolve-Path "windows/dist/SoundCloudX-Setup-$env:APP_VERSION-x64.exe").Path
+          $p = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR="' + $dir + '"')) -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'Installer timed out' }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0) { throw "Installer failed ($($p.ExitCode))" }
+          ./tools/test_windows.ps1 -Exe "$dir/SoundCloudX.exe" -Report runtime-reports/windows-installed.json
+      - name: Collect verified EXE and setup
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item windows/dist/*.exe dist/
       - uses: actions/upload-artifact@v4
         with:
           name: windows-exe
           path: dist/*.exe
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-runtime-reports
+          path: |
+            runtime-reports/
+            windows/build/SoundCloudX/warn-SoundCloudX.txt
 
-  # ============================================================ Release =======
   release:
-    name: Publish release
-    needs: [android, windows]
+    name: Publish only after runtime checks pass
+    needs: [version, android, android-runtime, windows]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download the built files
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
+          name: android-apk
           path: dist
-          merge-multiple: true
-
-      - name: Resolve tag
-        id: ver
-        run: |
-          set -e
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-          fi
-          case "${VERSION}" in
-            *[!0-9.]*|"") VERSION="1.0.${{ github.run_number }}" ;;
-          esac
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-          ls -la dist
-
-      - name: Publish
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-runtime-reports
+          path: reports/windows
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-runtime-*
+          path: reports/android
+      - name: Checksums and honest build report
+        env:
+          APP_VERSION: ${{ needs.version.outputs.name }}
+          SIGNING: ${{ needs.android.outputs.signing }}
+        run: python3 tools/release_manifest.py dist reports
+      - name: Publish verified files from this exact commit
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: SoundCloud X ${{ steps.ver.outputs.version }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
-          fail_on_unmatched_files: false
+          target_commitish: ${{ github.sha }}
+          tag_name: v${{ needs.version.outputs.name }}
+          name: SoundCloud X ${{ needs.version.outputs.name }}
+          prerelease: ${{ inputs.prerelease == true || needs.android.outputs.signing != 'production' || github.ref != 'refs/heads/main' }}
+          fail_on_unmatched_files: true
           body: |
-            ## SoundCloud X ${{ steps.ver.outputs.version }}
+            ## نسخهٔ اصلاح‌شده — SoundCloud X ${{ needs.version.outputs.name }}
 
-            آپلیکیشن دانلودر / پخش‌کننده / جستجوگر ساندکلاد
+            **فایل اجرایی دانلود کنید، نه Source code.**
+            * ویندوز: `SoundCloudX-Setup-${{ needs.version.outputs.name }}-x64.exe` نصب‌کنندهٔ کامل و آفلاین؛ نصب پایتون، pip یا کتابخانه لازم نیست.
+            * ویندوز پرتابل: `SoundCloudX.exe`؛ پایتون، Tcl/Tk، فونت‌ها، تصاویر، گواهی‌های TLS و موتور صوت داخل فایل بسته‌بندی شده‌اند.
+            * اندروید: `SoundCloudX-${{ needs.version.outputs.name }}.apk`؛ شامل کد برنامه و موتور Media3 برای پخش MP3/HLS، نه میان‌بر سایت.
 
-            | فایل | دستگاه | پشتیبانی |
-            |------|--------|----------|
-            | `SoundCloudX-${{ steps.ver.outputs.version }}.apk` | اندروید | اندروید ۷.۰ (API 24) تا اندروید ۱۵ و ۱۶ |
-            | `SoundCloudX.exe` | ویندوز | ویندوز ۷ تا ۱۱ (۶۴ بیتی) |
+            **تست‌ها:** اجرای خود EXE و نسخهٔ نصب‌شده با PATH بدون پایتون؛ نصب و باز شدن APK نهایی روی شبیه‌ساز اندروید ۷، ۱۴ و ۱۶؛ تست واقعی رابط، ذخیره‌سازی و پخش فایل صوتی محلی.
+            این تست‌ها اتصال زندهٔ ساندکلاد، ورود به حساب، کیفیت شبکهٔ شما یا همهٔ گوشی‌ها و ویندوزهای قدیمی را تضمین نمی‌کنند.
+            جزئیات و اندازهٔ واقعی فایل‌ها در `build-info.json` و صحت دانلود در `SHA256SUMS.txt`.
 
-            ### نصب
-            * **اندروید:** فایل APK را روی گوشی کپی و نصب کنید (اجازه‌ی «نصب از منابع ناشناس» لازم است).
-            * **ویندوز:** فایل EXE را اجرا کنید؛ نیازی به نصب پایتون نیست. اگر اسمارت‌اسکرین هشدار داد روی *More info → Run anyway* بزنید.
+            امضای اندروید: **${{ needs.android.outputs.signing }}**. بدون کلید امضای ثابت در Secrets، این یک پیش‌انتشار با کلید توسعه است؛ اگر نسخهٔ قبلی امضای دیگری دارد، ارتقای مستقیم ممکن نیست. داده‌های مهم را نگه دارید و نسخهٔ قبلی را حذف کنید. حجم APK عمداً با فایل اضافی بزرگ نشده است.
 
-            ### امکانات
-            * جستجوی آهنگ / خواننده و باز کردن مستقیم لینک ساندکلاد
-            * ترندهای همه‌ی سبک‌ها (الکترونیک، هیپ‌هاپ، راک، ...)
-            * پخش آنلاین + پخش در پس‌زمینه با نوتیفیکیشن و کنترل هدست
-            * دانلود MP3 با کیفیت ۱۲۸ و فایل اصلی (بعد از ورود با حساب)
-            * علاقه‌مندی‌ها، صف پخش، دانلودها
-
-            بدون نیاز به کلید API شخصی — کلاینت به‌صورت خودکار کلید عمومی ساندکلاد را پیدا می‌کند.
+            جستجو/ترند، علاقه‌مندی، صف پخش، پخش پس‌زمینه، دانلود MP3 قطعه‌ای و فایل اصلی مجاز. فایل اصلی فقط با اجازهٔ ناشر و دسترسی حساب؛ در صورت نبود دسترسی، خطا نمایش داده می‌شود و MP3 به جای Original تحویل نمی‌شود.
+            Windows 7 SP1/8.x: سازگاری کد/رانتایم قدیمی حفظ شده، ولی این سیستم‌ها در CI تست نشده‌اند.
           files: |
             dist/*.apk
             dist/*.exe
+            dist/android-signature.txt
+            dist/android-package.txt
+            dist/SHA256SUMS.txt
+            dist/build-info.json

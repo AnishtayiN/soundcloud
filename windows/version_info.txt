@@ -4,8 +4,8 @@
 # tools/bump_version.py rewrites both this file and src/scx/version.py.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 0, 1, 0),
+    prodvers=(1, 0, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'SoundCloud X'),
          StringStruct('FileDescription', 'SoundCloud X - SoundCloud downloader, player and search'),
-         StringStruct('FileVersion', '1.0.0.0'),
+         StringStruct('FileVersion', '1.0.1.0'),
          StringStruct('InternalName', 'SoundCloudX'),
          StringStruct('LegalCopyright', 'MIT licensed open source project'),
          StringStruct('OriginalFilename', 'SoundCloudX.exe'),
          StringStruct('ProductName', 'SoundCloud X'),
-         StringStruct('ProductVersion', '1.0.0.0')])
+         StringStruct('ProductVersion', '1.0.1.0')])
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

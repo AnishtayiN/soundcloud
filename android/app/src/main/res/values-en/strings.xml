@@ -62,4 +62,11 @@
     <string name="status_playing">Playing: %1$s</string>
     <string name="status_loading_track">Loading: %1$s</string>
     <string name="about_text">SoundCloud X %1$s\n\nSoundCloud downloader, search and player\n• Search &amp; trending\n• Online and background playback\n• MP3 and original file download\n• Favorites and play queue\n\nUnofficial open-source client, not affiliated with SoundCloud.</string>
+    <string name="download_channel">Downloads</string>
+    <string name="download_cancel">Cancel download</string>
+    <string name="download_cancelled">Download cancelled</string>
+    <string name="download_no_player">No installed app can open this audio file</string>
+    <string name="download_complete">Download complete</string>
+    <string name="download_failed">Download failed</string>
+    <string name="download_preparing">Preparing download…</string>
 </resources>

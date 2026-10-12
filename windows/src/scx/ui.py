@@ -12,10 +12,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-try:
-    from PIL import Image
-except Exception:  # pragma: no cover
-    Image = None
+from PIL import Image, ImageTk
 
 from . import util
 from .api import GENRES, SoundCloud
@@ -71,6 +68,8 @@ class App(ctk.CTk):
         self.mode = "charts"
         self.query = ""
         self.busy = False
+        self._page_token = 0
+        self._closing = False
         self._play_started_at = 0.0
         self._last_download_ui = 0.0
         self._downloads_window = None
@@ -120,7 +119,8 @@ class App(ctk.CTk):
             png = util.resource_path("assets", "icon.png")
             if os.path.isfile(png) and Image is not None:
                 image = Image.open(png)
-                self.iconphoto(True, ctk.CTkImage(image, size=(32, 32))._light_image)
+                self._window_icon = ImageTk.PhotoImage(image.resize((32, 32)))
+                self.iconphoto(True, self._window_icon)
         except Exception:
             pass
 
@@ -359,6 +359,8 @@ class App(ctk.CTk):
 
     def run_bg(self, work, on_done=None, on_error=None):
         def runner():
+            if self._closing:
+                return
             try:
                 result = work()
             except Exception as exc:
@@ -447,8 +449,10 @@ class App(ctk.CTk):
         self.load_page(append=True)
 
     def load_page(self, append=False):
-        if self.busy:
+        if self.busy and append:
             return
+        self._page_token += 1
+        token = self._page_token
         self.busy = True
         self.set_status(self.T("searching"))
         self.show_progress(True, indeterminate=True)
@@ -463,11 +467,15 @@ class App(ctk.CTk):
             return self.api.charts(genre, PAGE_SIZE, offset)
 
         def done(tracks):
+            if token != self._page_token or self._closing:
+                return
             self.busy = False
             self.show_progress(False)
             self._render_tracks(tracks, append)
 
         def failed(error):
+            if token != self._page_token or self._closing:
+                return
             self.busy = False
             self.show_progress(False)
             self.set_status(self.T("api_error") if "client_id" in error
@@ -752,6 +760,9 @@ class App(ctk.CTk):
             self.toggle_favorite(self.now_playing)
 
     def show_favorites(self):
+        self._page_token += 1
+        self.busy = False
+        self.show_progress(False)
         self.mode = "favorites"
         self.has_more = False
         self._clear_rows()
@@ -1070,7 +1081,6 @@ class App(ctk.CTk):
     def open_login(self):
         if self.api.logged_in:
             self.api.set_cookie_header("")
-            self.api.session.headers.pop("Cookie", None)
             self.apply_language()
             self.set_status(self.T("logout"))
             return
@@ -1102,7 +1112,6 @@ class App(ctk.CTk):
             if not value:
                 return
             self.api.set_cookie_header(value)
-            self.api.session.headers["Cookie"] = value
             self.apply_language()
             self.set_status(self.T("login_saved"))
             window.destroy()
@@ -1116,7 +1125,6 @@ class App(ctk.CTk):
             try:
                 cookie = self.api.import_cookies_file(path)
                 cookie_var.set(cookie)
-                self.api.session.headers["Cookie"] = cookie
                 self.apply_language()
                 self.set_status(self.T("login_saved"))
                 window.destroy()
@@ -1139,6 +1147,9 @@ class App(ctk.CTk):
     #  shutdown
     # =======================================================================
     def on_close(self):
+        self._closing = True
+        self._page_token += 1
+        self.api.close()
         try:
             if self.store:
                 self.store.save()
@@ -1153,6 +1164,8 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.executor.shutdown(wait=False)
+        for callback in self.tk.splitlist(self.tk.call("after", "info")):
+            self.after_cancel(callback)
         self.destroy()
 
 
@@ -1163,7 +1176,5 @@ def main():
 
     store = Store()
     api = SoundCloud(store)
-    if store.get("cookie_header"):
-        api.session.headers["Cookie"] = store.get("cookie_header")
     app = App(api, store)
     app.mainloop()

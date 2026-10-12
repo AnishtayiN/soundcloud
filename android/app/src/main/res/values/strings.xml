@@ -62,4 +62,11 @@
     <string name="status_playing">در حال پخش: %1$s</string>
     <string name="status_loading_track">در حال آماده‌سازی: %1$s</string>
     <string name="about_text">ساندکلاد ایکس %1$s\n\nدانلودر، جستجوگر و پخش‌کننده ساندکلاد\n• جستجو و ترندها\n• پخش آنلاین و پس‌زمینه\n• دانلود MP3 و فایل اصلی\n• علاقه‌مندی‌ها و صف پخش\n\nاین برنامه یک کلاینت غیررسمی و متن‌باز است و به ساندکلاد وابستگی ندارد.</string>
+    <string name="download_channel">دانلودها</string>
+    <string name="download_cancel">لغو دانلود</string>
+    <string name="download_cancelled">دانلود لغو شد</string>
+    <string name="download_no_player">برنامه‌ای برای باز کردن این فایل صوتی نصب نیست</string>
+    <string name="download_complete">دانلود کامل شد</string>
+    <string name="download_failed">دانلود ناموفق</string>
+    <string name="download_preparing">در حال آماده‌سازی دانلود…</string>
 </resources>

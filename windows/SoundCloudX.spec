@@ -1,61 +1,47 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller recipe for SoundCloudX.exe (single file, no console)."""
+"""Self-contained Windows executable, including its Python/Tcl/SDL runtimes.
+
+Do not exclude standard-library packages (email/http) or PIL.ImageTk: requests
+and customtkinter need them even if they are not imported by our entry point.
+"""
 import os
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
-block_cipher = None
-
-hidden = [
-    "scx", "scx.api", "scx.downloader", "scx.models", "scx.player",
-    "scx.store", "scx.strings", "scx.ui", "scx.util", "scx.version",
-]
-
-# Things that must never end up inside a 30 MB downloader.
-excludes = [
-    "numpy", "matplotlib", "scipy", "pandas", "test", "unittest",
-    "setuptools", "pip", "wheel", "email", "http.server", "xmlrpc",
-    "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
-    "PIL.ImageQt", "PIL.ImageTk", "PIL.ImageShow",
-    "curses", "distutils", "lib2to3", "pydoc_data",
-]
+ctk_data, ctk_binaries, ctk_hidden = collect_all("customtkinter")
+pygame_data, pygame_binaries, pygame_hidden = collect_all("pygame")
 
 a = Analysis(
     ["src/main.py"],
     pathex=["src"],
-    binaries=[],
-    datas=[("assets/icon.ico", "assets"), ("assets/icon.png", "assets")],
-    hiddenimports=hidden,
+    binaries=ctk_binaries + pygame_binaries,
+    datas=ctk_data + pygame_data + collect_data_files("certifi") + [
+        ("assets/icon.ico", "assets"), ("assets/icon.png", "assets"),
+        ("selftest.py", "."),
+    ],
+    hiddenimports=ctk_hidden + pygame_hidden + collect_submodules("scx") +
+                  collect_submodules("mutagen") + ["PIL.ImageTk", "email.utils", "http.client"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=excludes,
+    # Optional, unrelated GUI/scientific frameworks only. Never trim runtime
+    # dependencies to meet an arbitrary download-size target.
+    excludes=["matplotlib", "scipy", "pandas", "PyQt5", "PyQt6", "PySide2", "PySide6", "wx"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
-    cipher=block_cipher,
+    cipher=None,
     noarchive=False,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
+    pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [],
     name="SoundCloudX",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
     icon=os.path.join("assets", "icon.ico"),
     version=os.path.join("version_info.txt"),
 )

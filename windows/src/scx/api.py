@@ -88,6 +88,7 @@ class SoundCloud(object):
             "Accept-Language": "en-US,en;q=0.9",
         })
         self._client_id = None
+        self._closed = False
 
     # ================================================================ cookies
     @property
@@ -95,6 +96,7 @@ class SoundCloud(object):
         return (self.store.get("cookie_header") or "") if self.store else ""
 
     def set_cookie_header(self, cookie):
+        self.session.headers.pop("Cookie", None)
         if self.store:
             self.store.set("cookie_header", cookie or "")
 
@@ -104,25 +106,26 @@ class SoundCloud(object):
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             for line in fh:
                 line = line.strip()
+                if line.startswith("#HttpOnly_"):
+                    line = line[len("#HttpOnly_"):]
                 if not line or line.startswith("#"):
                     continue
                 parts = line.split("\t")
                 if len(parts) < 7:
                     continue
                 domain, _flag, _path_, _secure, _exp, name, value = parts[:7]
-                if "soundcloud.com" in domain:
+                if domain.lstrip(".") == "soundcloud.com" or domain.endswith(".soundcloud.com"):
                     pairs.append("%s=%s" % (name, value))
         cookie = "; ".join(pairs)
         if not cookie:
             raise SoundCloudError("no soundcloud cookies in this file")
         self.set_cookie_header(cookie)
-        self.session.headers["Cookie"] = cookie
         return cookie
 
     @property
     def oauth_token(self):
         match = _RE_OAUTH.search(self.cookie_header)
-        return match.group(1) if match else ""
+        return urllib.parse.unquote(match.group(1)) if match else ""
 
     @property
     def logged_in(self):
@@ -170,6 +173,8 @@ class SoundCloud(object):
             self.store.set("client_id_time", 0, save=True)
 
     def _valid_client_id(self, client_id):
+        if self._closed:
+            return False
         try:
             url = API_V2 + "/search/tracks?q=test&limit=1&client_id=" + urllib.parse.quote(client_id)
             response = self.session.get(url, timeout=self.timeout)
@@ -184,7 +189,7 @@ class SoundCloud(object):
             match = pattern.search(html)
             if match:
                 return match.group(1)
-        scripts = list(dict.fromkeys(_RE_JS.findall(html)))[:8]
+        scripts = list(reversed(list(dict.fromkeys(_RE_JS.findall(html)))))[:12]
         for script in scripts:
             try:
                 js = self._get_text(script)
@@ -197,15 +202,36 @@ class SoundCloud(object):
         return ids[0] if ids else None
 
     # ==================================================================== http
+    def close(self):
+        self._closed = True
+        close = getattr(self.session, "close", None)
+        if close:
+            close()
+
+    def _ensure_open(self):
+        if self._closed:
+            raise SoundCloudError("application closed")
+
     def _get_text(self, url, follow=True):
+        self._ensure_open()
         response = self.session.get(url, timeout=self.timeout, allow_redirects=follow)
         if response.status_code in (401, 403):
             raise SoundCloudError("unauthorized (%s)" % response.status_code)
         response.raise_for_status()
         return response.text
 
+    def _auth_headers(self, url):
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host == "soundcloud.com" or host.endswith(".soundcloud.com"):
+            headers = {"Cookie": self.cookie_header} if self.cookie_header else {}
+            if self.oauth_token:
+                headers["Authorization"] = "OAuth " + self.oauth_token
+            return headers
+        return {}
+
     def _get_json(self, url):
-        response = self.session.get(url, timeout=self.timeout)
+        self._ensure_open()
+        response = self.session.get(url, timeout=self.timeout, headers=self._auth_headers(url))
         if response.status_code in (401, 403):
             raise SoundCloudError("unauthorized (%s)" % response.status_code)
         response.raise_for_status()
@@ -215,10 +241,16 @@ class SoundCloud(object):
 
     def _api_v2(self, path, params=None):
         params = dict(params or {})
-        params["client_id"] = self.client_id
         params.setdefault("app_locale", "en")
-        url = API_V2 + path + "?" + urllib.parse.urlencode(params)
-        return self._get_json(url)
+        for attempt in range(2):
+            params["client_id"] = self.client_id
+            url = API_V2 + path + "?" + urllib.parse.urlencode(params)
+            try:
+                return self._get_json(url)
+            except SoundCloudError:
+                if attempt:
+                    raise
+                self.forget_client_id()
 
     # ================================================================== search
     def search(self, query, limit=30, offset=0):
@@ -277,73 +309,86 @@ class SoundCloud(object):
         return tracks
 
     # ================================================================ playback
+    def _direct_url(self, url):
+        self._ensure_open()
+        response = self.session.get(url, timeout=self.timeout, allow_redirects=False,
+                                    headers=self._auth_headers(url))
+        if response.status_code in (301, 302, 303, 307, 308):
+            target = response.headers.get("Location") or ""
+        elif response.status_code == 200:
+            text = response.text.strip()
+            if text.startswith("https://"):
+                target = text.split("\n")[0]
+            else:
+                data = response.json()
+                target = data.get("url") or data.get("redirectUri") or ""
+        else:
+            raise SoundCloudError("media request failed (HTTP %d)" % response.status_code)
+        target = urllib.parse.urljoin(url, target)
+        if not target or urllib.parse.urlparse(target).scheme != "https" or target == url:
+            raise SoundCloudError("no valid media URL returned")
+        return target
+
     def stream_url(self, track):
-        """Direct CDN url of the 128 kbps progressive stream."""
+        """Use the actual transcoding endpoints advertised by SoundCloud.
+
+        MP3 progressive first, then complete, unencrypted MP3 HLS. Guessing
+        /media/<id>/stream URLs is only a legacy fallback, not the main path.
+        """
+        if not track.streamable or track.policy == "BLOCK":
+            raise SoundCloudError("this track is not available for streaming")
+        transcodings, auth = track.transcodings, track.track_authorization
+        if not transcodings:
+            details = self.track_details(track.id)
+            transcodings = (details.get("media") or {}).get("transcodings") or []
+            auth = details.get("track_authorization") or auth
         params = {"client_id": self.client_id}
-        if track.track_authorization:
-            params["track_authorization"] = track.track_authorization
-        paths = [
-            "/media/soundcloud:tracks:%s/stream/progressive" % track.id,
-            "/media/soundcloud:tracks:%s/stream/hls" % track.id,
-        ]
-        for path in paths:
+        if auth:
+            params["track_authorization"] = auth
+        candidates = []
+        for item in transcodings:
+            fmt = item.get("format") or {}
+            if (fmt.get("protocol") in ("progressive", "hls") and
+                    "mpeg" in fmt.get("mime_type", "") and not item.get("snipped") and
+                    "/preview/" not in item.get("url", "")):
+                candidates.append(item)
+        candidates.sort(key=lambda t: t["format"].get("protocol") != "progressive")
+        for item in candidates:
+            url = item.get("url") or ""
+            if urllib.parse.urlparse(url).hostname != "api-v2.soundcloud.com":
+                continue
             try:
-                url = API_V2 + path + "?" + urllib.parse.urlencode(params)
-                response = self.session.get(url, timeout=self.timeout, allow_redirects=False)
-                if response.status_code in (301, 302, 303, 307, 308):
-                    return response.headers.get("Location")
-                if response.status_code == 200:
-                    text = response.text.strip()
-                    if text.startswith("http"):
-                        return text.split("\n")[0].strip()
-                    try:
-                        data = json.loads(text)
-                    except ValueError:
-                        data = {}
-                    if isinstance(data, dict):
-                        if str(data.get("url", "")).startswith("http"):
-                            return data["url"]
-                        hls = data.get("hls") or {}
-                        if str(hls.get("url", "")).startswith("http"):
-                            return hls["url"]
+                return self._direct_url(url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params))
             except Exception:
                 continue
-        # legacy endpoint
-        try:
-            url = "%s/tracks/%s/stream?client_id=%s" % (API_V1, track.id,
-                                                        urllib.parse.quote(self.client_id))
-            response = self.session.get(url, timeout=self.timeout, allow_redirects=False)
-            if response.status_code in (301, 302, 303, 307, 308):
-                return response.headers.get("Location")
-        except Exception:
-            pass
-        raise SoundCloudError("this track can not be streamed")
+        if transcodings:
+            raise SoundCloudError("no complete, unencrypted MP3 stream is available for this track")
+        for path in ("/media/soundcloud:tracks:%s/stream/progressive" % track.id,
+                     "/media/soundcloud:tracks:%s/stream/hls" % track.id):
+            try:
+                return self._direct_url(API_V2 + path + "?" + urllib.parse.urlencode(params))
+            except Exception:
+                continue
+        raise SoundCloudError("this track cannot be streamed")
 
     def download_url(self, track, original=False):
-        """Url to hand to the downloader. original=True asks for the source file."""
-        if original:
-            raw = track.download_url
-            if not raw:
-                try:
-                    raw = self.track_details(track.id).get("download_url") or ""
-                except Exception:
-                    raw = ""
-            if raw:
-                params = {"client_id": self.client_id}
-                if self.oauth_token:
-                    params["oauth_token"] = self.oauth_token
-                sep = "&" if "?" in raw else "?"
-                full = raw + sep + urllib.parse.urlencode(params)
-                try:
-                    response = self.session.get(full, timeout=self.timeout, allow_redirects=False)
-                    if response.status_code in (301, 302, 303, 307, 308):
-                        return response.headers.get("Location")
-                    if response.status_code == 200 and response.text.strip().startswith("http"):
-                        return response.text.strip().split("\n")[0]
-                except Exception:
-                    pass
-                raise SoundCloudError("original file needs a signed in account")
-        return self.stream_url(track)
+        if not original:
+            return self.stream_url(track)
+        details = self.track_details(track.id)
+        if not details.get("downloadable", track.downloadable):
+            raise SoundCloudError("the artist has not enabled original downloads")
+        params = {"client_id": self.client_id}
+        # OAuth stays in the scoped request headers, not in a URL/log/CDN request.
+        endpoints = [API_V2 + "/tracks/%s/download" % track.id]
+        raw = details.get("download_url") or track.download_url
+        if raw and urllib.parse.urlparse(raw).hostname in ("api.soundcloud.com", "api-v2.soundcloud.com"):
+            endpoints.append(raw)
+        for url in endpoints:
+            try:
+                return self._direct_url(url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params))
+            except Exception:
+                continue
+        raise SoundCloudError("original file unavailable; sign in with an authorized account")
 
     @staticmethod
     def extension_for(url, original=False):

@@ -32,3 +32,10 @@ build/
 .DS_Store
 Thumbs.db
 gradle-build.log
+
+# Local inspection, runtime reports and generated releases
+.cache/
+.artifacts/
+releases/
+runtime-reports/
+test-builds/

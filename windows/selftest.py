@@ -24,6 +24,7 @@ if SRC not in sys.path:
 
 FAILURES = []
 CHECKS = [0]
+REQUIRE_UI = False
 
 
 def check(name, condition, detail=""):
@@ -89,6 +90,10 @@ class FakeResponse(object):
         self.headers = headers or {}
         self._json = json_data
         self._chunks = chunks
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def json(self):
         if self._json is not None:
@@ -114,10 +119,12 @@ class FakeSession(object):
         self.headers = {}
         self.routes = routes or {}
         self.calls = []
+        self.requests = []
 
     def get(self, url, **kwargs):
         """Routes are URL prefixes, the most specific one wins."""
         self.calls.append(url)
+        self.requests.append((url, kwargs))
         best_key = None
         best_value = None
         for key, value in self.routes.items():
@@ -152,7 +159,7 @@ def make_routes():
         "https://api.soundcloud.com/tracks/111/download":
             FakeResponse(status_code=302,
                          headers={"Location": "https://cf-media.sndcdn.com/original-111.wav"}),
-        "https://cf-media.sndcdn.com/": FakeResponse(content=b"MP3DATA" * 5000),
+        "https://cf-media.sndcdn.com/": FakeResponse(content=b"ID3DATA" * 5000),
         "https://i1.sndcdn.com/": FakeResponse(content=PNG),
     }
 
@@ -265,7 +272,7 @@ def test_downloader():
             os.path.join(folder, "out.mp3"),
             on_progress=lambda done, total, speed: progress.append((done, total)))
         size = os.path.getsize(target)
-        check("file written", size == len(b"MP3DATA" * 5000), size)
+        check("file written", size == len(b"ID3DATA" * 5000), size)
         check("part file removed", not os.path.exists(target + ".part"))
         check("progress reported", bool(progress))
 
@@ -289,6 +296,89 @@ def test_downloader():
                   exc.__class__.__name__)
 
 
+def test_media_regressions():
+    section("HLS / download regression tests")
+    from scx.media import parse_playlist, PlaylistError
+    from scx.downloader import Downloader
+    from scx.api import SoundCloud, SoundCloudError
+    from scx.models import Track
+    from scx.store import Store
+    base = "https://cdn.example/list.m3u8"
+    body = "#EXTM3U\n#EXTINF:1,\na.mp3\nb.mp3\n#EXT-X-ENDLIST\n"
+    child, segments = parse_playlist(body, base)
+    check("HLS relative segments", len(segments) == 2 and segments[0][0] == "https://cdn.example/a.mp3")
+    master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=64000\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nhigh.m3u8"
+    check("HLS master variant", parse_playlist(master, base)[0].endswith("high.m3u8"))
+    ranged = "#EXTM3U\n#EXT-X-BYTERANGE:10@0\na.mp3\n#EXT-X-BYTERANGE:20\na.mp3\n#EXT-X-ENDLIST"
+    check("HLS implicit byte range", parse_playlist(ranged, base)[1][1][1:] == (10, 20))
+    for name, bad in (
+        ("encrypted", "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128\na.mp3\n#EXT-X-ENDLIST"),
+        ("live", "#EXTM3U\na.mp3"),
+        ("fMP4", "#EXTM3U\n#EXT-X-MAP:URI=init.mp4\na.m4a\n#EXT-X-ENDLIST"),
+        ("unsafe URL", "#EXTM3U\nfile:///etc/passwd\n#EXT-X-ENDLIST"),
+        ("implicit first range", "#EXTM3U\n#EXT-X-BYTERANGE:5\na.mp3\n#EXT-X-ENDLIST"),
+        ("HTML", "<html>error</html>"),
+    ):
+        try:
+            parse_playlist(bad, base)
+            check("reject " + name, False)
+        except PlaylistError:
+            check("reject " + name, True)
+    with tempfile.TemporaryDirectory() as folder:
+        data_a, data_b = b"ID3" + b"a" * 5000, b"ID3" + b"b" * 5000
+        session = FakeSession({base: FakeResponse(text=body),
+            "https://cdn.example/a.mp3": FakeResponse(content=data_a),
+            "https://cdn.example/b.mp3": FakeResponse(content=data_b)})
+        path = os.path.join(folder, "real.mp3")
+        Downloader(session).fetch_to(base, path)
+        with open(path, "rb") as stream:
+            check("HLS writes audio segments, not playlist", stream.read() == data_a + data_b)
+        check("HLS temporary file removed", not os.path.exists(path + ".part"))
+        html = FakeSession({base: FakeResponse(text="<html>not audio</html>")})
+        try:
+            Downloader(html).fetch_to(base, path)
+            check("HTML not saved as audio", False)
+        except IOError:
+            with open(path, "rb") as stream:
+                check("failed transfer preserves existing file", stream.read() == data_a + data_b)
+            check("failed transfer removes partial", not os.path.exists(path + ".part"))
+        short = FakeSession({base: FakeResponse(content=data_a, headers={"Content-Length": "999999"})})
+        try:
+            Downloader(short).fetch_to(base, os.path.join(folder, "short.mp3"))
+            check("truncated audio rejected", False)
+        except IOError:
+            check("truncated audio rejected", True)
+        store = Store(os.path.join(folder, "settings.json"))
+        routes = make_routes()
+        opaque = "https://api-v2.soundcloud.com/media/opaque/encoded/hls"
+        raw = dict(TRACK_A, media={"transcodings": [{"url": opaque, "snipped": False,
+            "format": {"protocol": "hls", "mime_type": "audio/mpeg"}}]})
+        routes[opaque] = FakeResponse(json_data={"url": base})
+        api = SoundCloud(store, session=FakeSession(routes))
+        api.set_cookie_header("oauth_token=secret")
+        check("actual advertised transcoding used", api.stream_url(Track.from_json(raw)) == base)
+        calls = api.session.requests
+        check("OAuth scoped to API host", any(k.get("headers", {}).get("Authorization") == "OAuth secret" for u,k in calls if u.startswith(opaque)))
+        check("no global Cookie leaked to media CDN", "Cookie" not in api.session.headers)
+        blocked = Track.from_json(dict(TRACK_A, streamable=False))
+        try:
+            api.stream_url(blocked)
+            check("blocked tracks respected", False)
+        except SoundCloudError:
+            check("blocked tracks respected", True)
+        routes["https://api-v2.soundcloud.com/tracks/111"] = FakeResponse(json_data=dict(TRACK_A, downloadable=False))
+        try:
+            api.download_url(Track.from_json(TRACK_A), original=True)
+            check("Original never silently falls back to MP3", False)
+        except SoundCloudError:
+            check("Original never silently falls back to MP3", True)
+        cookies = os.path.join(folder, "cookies.txt")
+        with open(cookies, "w", encoding="utf-8") as stream:
+            stream.write("#HttpOnly_.soundcloud.com\tTRUE\t/\tTRUE\t0\toauth_token\tvalid\n")
+            stream.write("evil-soundcloud.com\tTRUE\t/\tTRUE\t0\toauth_token\twrong\n")
+        check("HttpOnly cookies and strict domain", api.import_cookies_file(cookies) == "oauth_token=valid")
+
+
 def test_player():
     section("player")
     from scx.player import NullPlayer, Player
@@ -307,7 +397,7 @@ def test_ui():
     try:
         import tkinter
     except Exception as exc:
-        print("  skip: tkinter unavailable (%s)" % exc)
+        check("tkinter available", not REQUIRE_UI, str(exc))
         return
     try:
         from scx.ui import App
@@ -322,7 +412,7 @@ def test_ui():
         try:
             app = App(api, store, auto_load=False)
         except tkinter.TclError as exc:
-            print("  skip: no display (%s)" % exc)
+            check("UI display available", not REQUIRE_UI, str(exc))
             return
         except Exception:
             check("window builds", False, traceback.format_exc())
@@ -342,9 +432,13 @@ def test_ui():
                 app.update()
                 time.sleep(0.05)
             check("cover art loaded", bool(app.image_cache))
+            app.do_search()
             app.show_favorites()
-            app.update()
-            check("favorites view works", app.mode == "favorites")
+            until = time.time() + 0.3
+            while time.time() < until:
+                app.update()
+                time.sleep(0.02)
+            check("favorites ignores stale search response", app.mode == "favorites" and not app.tracks)
             app.load_trending()
             deadline = time.time() + 15
             while time.time() < deadline and len(app.tracks) < 2:
@@ -367,8 +461,12 @@ def test_ui():
 
 
 def main(argv):
+    global REQUIRE_UI
+    REQUIRE_UI = "--require-ui" in argv
+    FAILURES.clear()
+    CHECKS[0] = 0
     print("SoundCloud X self test")
-    tests = [test_util, test_models, test_store, test_api, test_downloader, test_player]
+    tests = [test_util, test_models, test_store, test_api, test_downloader, test_media_regressions, test_player]
     if "--ui" in argv:
         tests.append(test_ui)
     for test in tests:

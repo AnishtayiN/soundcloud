@@ -146,7 +146,7 @@ public final class Prefs {
     }
 
     // ------------------------------------------------------------ downloads ---
-    public void addDownload(long id, String name, String title, String artist) {
+    public synchronized void addDownload(long id, String name, String title, String artist) {
         try {
             JSONArray arr = downloads();
             JSONObject o = new JSONObject();
@@ -161,7 +161,35 @@ public final class Prefs {
         }
     }
 
-    public void removeDownload(long id) {
+    public synchronized void updateDownload(long id, String state, String uri, String mime,
+                                             long done, long total, String error) {
+        try {
+            JSONArray arr = downloads();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null || o.optLong("id") != id) continue;
+                o.put("state", state);
+                o.put("uri", uri);
+                o.put("mime", mime);
+                o.put("done", done);
+                o.put("total", total);
+                o.put("error", error);
+                break;
+            }
+            sp.edit().putString("downloads", arr.toString()).apply();
+        } catch (Exception ignored) { }
+    }
+
+    public synchronized JSONObject download(long id) {
+        JSONArray arr = downloads();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && o.optLong("id") == id) return o;
+        }
+        return null;
+    }
+
+    public synchronized void removeDownload(long id) {
         try {
             JSONArray arr = downloads();
             JSONArray out = new JSONArray();
@@ -176,7 +204,7 @@ public final class Prefs {
         }
     }
 
-    public JSONArray downloads() {
+    public synchronized JSONArray downloads() {
         try {
             return new JSONArray(sp.getString("downloads", "[]"));
         } catch (Exception e) {
