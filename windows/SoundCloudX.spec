@@ -5,7 +5,17 @@ Do not exclude standard-library packages (email/http) or PIL.ImageTk: requests
 and customtkinter need them even if they are not imported by our entry point.
 """
 import os
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+import sys
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
+sys.path.insert(0, os.path.join(SPECPATH, "src"))
+license_data = []
+for distribution in ("requests", "urllib3", "certifi", "Pillow", "mutagen", "darkdetect", "idna", "charset-normalizer"):
+    license_data += copy_metadata(distribution)
+for filename in ("LICENSE.txt", "LICENSE"):
+    path = os.path.join(sys.base_prefix, filename)
+    if os.path.isfile(path):
+        license_data.append((path, "licenses/python"))
+        break
 
 ctk_data, ctk_binaries, ctk_hidden = collect_all("customtkinter")
 pygame_data, pygame_binaries, pygame_hidden = collect_all("pygame")
@@ -14,9 +24,9 @@ a = Analysis(
     ["src/main.py"],
     pathex=["src"],
     binaries=ctk_binaries + pygame_binaries,
-    datas=ctk_data + pygame_data + collect_data_files("certifi") + [
+    datas=ctk_data + pygame_data + license_data + collect_data_files("certifi") + [
         ("assets/icon.ico", "assets"), ("assets/icon.png", "assets"),
-        ("selftest.py", "."),
+        ("selftest.py", "."), ("THIRD_PARTY_NOTICES.txt", "."),
     ],
     hiddenimports=ctk_hidden + pygame_hidden + collect_submodules("scx") +
                   collect_submodules("mutagen") + ["PIL.ImageTk", "email.utils", "http.client"],

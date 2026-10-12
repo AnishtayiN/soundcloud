@@ -120,20 +120,30 @@ jobs:
       - name: Verify and collect the exact release APK
         env:
           APP_VERSION: ${{ needs.version.outputs.name }}
+          APP_CODE: ${{ needs.version.outputs.code }}
         run: |
           set -euo pipefail
+          trap 'echo "::error title=APK verification::line $LINENO failed: $BASH_COMMAND"' ERR
           mkdir -p dist test-builds
-          APK="android/app/build/outputs/apk/release/SoundCloudX-$APP_VERSION-release.apk"
+          mapfile -t RELEASES < <(find android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -type f)
+          [ "${#RELEASES[@]}" -eq 1 ]
+          APK="${RELEASES[0]}"
           test -s "$APK"
+          echo "::notice title=Release APK::$APK"
           TOOLS="$ANDROID_HOME/build-tools/34.0.0"
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee dist/android-signature.txt
           "$TOOLS/aapt" dump badging "$APK" | tee dist/android-package.txt
           if grep -q 'application-debuggable' dist/android-package.txt; then exit 1; fi
           grep -q "launchable-activity: name='com.soundcloudx.app.MainActivity'" dist/android-package.txt
+          grep -q "versionName='$APP_VERSION'" dist/android-package.txt
+          grep -q "versionCode='$APP_CODE'" dist/android-package.txt
           python3 tools/check_apk.py "$APK"
           cp "$APK" "dist/SoundCloudX-$APP_VERSION.apk"
-          cp "android/app/build/outputs/apk/debug/SoundCloudX-$APP_VERSION-debug.apk" test-builds/SoundCloudX-debug.apk
-          cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk test-builds/SoundCloudX-tests.apk
+          mapfile -t DEBUGS < <(find android/app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -type f)
+          mapfile -t TESTS < <(find android/app/build/outputs/apk/androidTest/debug -maxdepth 1 -name '*.apk' -type f)
+          [ "${#DEBUGS[@]}" -eq 1 ] && [ "${#TESTS[@]}" -eq 1 ]
+          cp "${DEBUGS[0]}" test-builds/SoundCloudX-debug.apk
+          cp "${TESTS[0]}" test-builds/SoundCloudX-tests.apk
           ls -lh dist/*.apk
       - name: Show useful errors
         if: failure()

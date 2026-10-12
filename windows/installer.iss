@@ -31,9 +31,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "dist\SoundCloudX.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\SoundCloud X"; Filename: "{app}\SoundCloudX.exe"
+Name: "{group}\Third-party notices"; Filename: "{app}\THIRD_PARTY_NOTICES.txt"
 Name: "{group}\Run offline diagnostics"; Filename: "{app}\SoundCloudX.exe"; Parameters: "--self-test"
 Name: "{group}\Uninstall SoundCloud X"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\SoundCloud X"; Filename: "{app}\SoundCloudX.exe"; Tasks: desktopicon
