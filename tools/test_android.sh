@@ -7,6 +7,19 @@ DEBUG_APK=$2
 TEST_APK=$3
 REPORT_DIR=$4
 mkdir -p "$REPORT_DIR"
+failed() {
+  local code=$1 line=$2 command=$3
+  trap - ERR
+  echo "::error title=Android runtime::line $line failed ($code): $command"
+  adb logcat -d -b crash > "$REPORT_DIR/failure-crash.txt" 2>/dev/null || true
+  for file in "$REPORT_DIR/failure-crash.txt" "$REPORT_DIR/instrumentation.txt" "$REPORT_DIR/release-launch.txt"; do
+    if [ -f "$file" ]; then
+      tail -45 "$file" | while IFS= read -r detail; do echo "::error title=Android failure detail::$detail"; done
+    fi
+  done
+  exit "$code"
+}
+trap 'failed $? "$LINENO" "$BASH_COMMAND"' ERR
 adb logcat -c
 adb install -r "$RELEASE_APK"
 API=$(adb shell getprop ro.build.version.sdk | tr -d '\r')
