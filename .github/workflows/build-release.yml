@@ -124,19 +124,33 @@ jobs:
 
       - name: Collect APK
         run: |
-          set -e
           mkdir -p dist
-          APK=$(find android/app/build/outputs/apk/release -name "*.apk" -type f | head -1)
-          test -n "${APK}"
-          cp "${APK}" "dist/SoundCloudX-${{ steps.ver.outputs.version }}.apk"
+          APK=""
+          while IFS= read -r candidate; do
+            echo "found: $candidate"
+            APK="$candidate"
+            break
+          done <<< "$(find android -name '*.apk' -type f 2>/dev/null)"
+          if [ -z "$APK" ]; then
+            echo "::error title=APK::no APK file was produced"
+            while IFS= read -r line; do
+              echo "::error title=Build tree::$line"
+            done <<< "$(find android/app/build -maxdepth 4 -print 2>/dev/null | head -40)"
+            exit 1
+          fi
+          cp "$APK" "dist/SoundCloudX-${{ steps.ver.outputs.version }}.apk"
           ls -la dist
 
-      - name: Sign check
+      - name: Sanity check the APK
         run: |
-          set -e
           APK=$(find dist -name "*.apk" | head -1)
-          echo "APK: ${APK}"
-          "$ANDROID_HOME"/build-tools/*/aapt dump badging "${APK}" | head -5 || true
+          echo "APK: ${APK} ($(du -h "${APK}" | cut -f1))"
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt 2>/dev/null | sort | tail -1)
+          if [ -n "${AAPT}" ]; then
+            "${AAPT}" dump badging "${APK}" | grep -E "package:|sdkVersion|targetSdkVersion" || true
+          else
+            "$ANDROID_HOME/build-tools"/*/aapt dump badging "${APK}" | head -5 || true
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
