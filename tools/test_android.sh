@@ -40,7 +40,11 @@ adb shell am force-stop com.soundcloudx.app
 adb install -r "$DEBUG_APK"
 adb install -r "$TEST_APK"
 if [ "$API" -ge 33 ]; then adb shell pm grant com.soundcloudx.app.debug android.permission.POST_NOTIFICATIONS; fi
-if [ "$API" -le 28 ]; then adb shell pm grant com.soundcloudx.app.debug android.permission.WRITE_EXTERNAL_STORAGE; fi
+if [ "$API" -le 28 ]; then
+  adb shell pm grant com.soundcloudx.app.debug android.permission.READ_EXTERNAL_STORAGE
+  adb shell pm grant com.soundcloudx.app.debug android.permission.WRITE_EXTERNAL_STORAGE
+  adb shell am force-stop com.soundcloudx.app.debug
+fi
 adb shell am instrument -w com.soundcloudx.app.debug.test/androidx.test.runner.AndroidJUnitRunner | tee "$REPORT_DIR/instrumentation.txt"
 # adb returns zero even for failed tests: inspect the actual runner result.
 grep -q 'OK (5 tests)' "$REPORT_DIR/instrumentation.txt"

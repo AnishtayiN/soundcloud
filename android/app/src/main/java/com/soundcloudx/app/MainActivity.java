@@ -558,11 +558,12 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
             return;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
-                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                != PackageManager.PERMISSION_GRANTED) {
+                && (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                    || checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)) {
             pendingDownload = track;
             pendingOriginal = original;
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_STORAGE);
             return;
         }
         toast(R.string.toast_download_started);
@@ -580,7 +581,9 @@ public class MainActivity extends Activity implements AdapterView.OnItemClickLis
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] granted) {
         super.onRequestPermissionsResult(requestCode, permissions, granted);
         if (requestCode == REQ_STORAGE) {
-            if (granted.length > 0 && granted[0] == PackageManager.PERMISSION_GRANTED) {
+            boolean allowed = granted.length == 2;
+            for (int value : granted) allowed &= value == PackageManager.PERMISSION_GRANTED;
+            if (allowed) {
                 if (pendingDownload != null) {
                     performDownload(pendingDownload, pendingOriginal);
                 }

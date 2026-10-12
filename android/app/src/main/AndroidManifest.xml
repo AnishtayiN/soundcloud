@@ -15,6 +15,10 @@
     <uses-permission
         android:name="android.permission.POST_NOTIFICATIONS"
         tools:targetApi="33" />
+    <!-- Legacy public Music storage needs the read/write storage group.
+         Modern Android uses owned MediaStore files and neither permission. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <!-- Only used on Android 9 and older to write into /sdcard/Music -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"

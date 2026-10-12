@@ -148,7 +148,10 @@ public class AppSmokeTest {
             } finally { c.getContentResolver().delete(target, null, null); }
         } else {
             File dir = new File(Downloader.folderPath());
-            assertTrue(dir.exists() || dir.mkdirs());
+            assertTrue("Legacy Music storage unavailable: state=" + android.os.Environment.getExternalStorageState()
+                    + ", read=" + c.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    + ", write=" + c.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    + ", path=" + dir, dir.exists() || dir.mkdirs());
             File file = new File(dir, "scx-smoke.mp3");
             try {
                 try (OutputStream out = new FileOutputStream(file)) { out.write("ID3test".getBytes()); }
