@@ -62,4 +62,22 @@
     <string name="status_playing">در حال پخش: %1$s</string>
     <string name="status_loading_track">در حال آماده‌سازی: %1$s</string>
     <string name="about_text">ساندکلاد ایکس %1$s\n\nدانلودر، جستجوگر و پخش‌کننده ساندکلاد\n• جستجو و ترندها\n• پخش آنلاین و پس‌زمینه\n• دانلود MP3 و فایل اصلی\n• علاقه‌مندی‌ها و صف پخش\n\nاین برنامه یک کلاینت غیررسمی و متن‌باز است و به ساندکلاد وابستگی ندارد.</string>
+    <string name="error_unknown">خطای ناشناخته‌ای رخ داد؛ دوباره تلاش کنید</string>
+    <string name="error_audio_focus">پخش شروع نشد؛ دستگاه صوتی در اختیار برنامه دیگری است. پخش آن را متوقف کنید و دوباره تلاش کنید.</string>
+    <string name="error_not_streamable">این آهنگ قابل پخش نیست؛ محدودیت ساندکلاد یا نیاز به حساب Go+ دارد</string>
+    <string name="error_media">فایل صوتی قابل پخش نیست؛ دوباره تلاش کنید</string>
+    <string name="player_notification">پخش‌کننده موسیقی</string>
+    <string name="action_previous">آهنگ قبلی</string>
+    <string name="action_pause">توقف موقت</string>
+    <string name="action_stop">توقف</string>
+    <string name="menu_settings">تنظیمات</string>
+    <string name="allow_roaming">دانلود در رومینگ</string>
+    <string name="roaming_description">خاموش بودن این گزینه از دانلود هنگام رومینگ جلوگیری می‌کند.</string>
+    <string name="toast_download_duplicate">این آهنگ قبلاً دانلود شده یا در صف دانلود است</string>
+    <string name="toast_download_complete">دانلود آهنگ کامل شد</string>
+    <string name="error_storage">ذخیره‌سازی امن در دسترس نیست؛ اطلاعات ورود ذخیره نشد</string>
+    <string name="language">زبان برنامه</string>
+    <string name="language_fa">فارسی</string>
+    <string name="language_en">English</string>
+    <string name="error_save">ذخیره تنظیمات ممکن نشد؛ نسخه قبلی حفظ شد</string>
 </resources>

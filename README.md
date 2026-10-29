@@ -3,8 +3,7 @@
 <div dir="ltr">
 
 **SoundCloud downloader + player + search for Android 7 – 16 and Windows 7 – 11.**
-Pure Java for Android (no libraries at all) and Python for Windows, built and
-published automatically by GitHub Actions.
+Java for Android and Python for Windows, built and verified automatically by GitHub Actions.
 
 </div>
 
@@ -13,10 +12,10 @@ published automatically by GitHub Actions.
 ## چطور فایل نصبی را بگیرم؟ (ساده‌ترین راه)
 
 ۱. برو به تب **Actions** در همین ریپو.
-۲. از ستون کنار، ورک‌فلوی **Build & Release** را انتخاب کن.
+۲. از ستون کنار، ورک‌فلوی **Build & verify Android / Windows** را انتخاب کن.
 ۳. دکمه‌ی **Run workflow** را بزن (فیلد `version` را می‌توانی خالی بگذاری).
-۴. صبر کن تا هر دو جاب (`Android APK` و `Windows EXE`) سبز شوند (حدود ۵ تا ۸ دقیقه).
-۵. برو به تب **Releases** → جدیدترین ریلیز → این دو فایل را دانلود کن:
+۴. صبر کن تا تست‌ها، بیلدهای APK/EXE و تست‌های شبیه‌ساز اندروید ۷، ۱۴ و ۱۶ سبز شوند.
+۵. خروجی‌ها را از **Artifacts** بگیر؛ برای نسخه‌های منتشرشده به تب **Releases** برو:
 
 | فایل | برای | قابل نصب روی |
 |------|------|---------------|
@@ -55,7 +54,7 @@ SmartScreen هشدار داد: **More info → Run anyway**. برای ویندو
 * پخش **در پس‌زمینه** با نوتیفیکیشن مدیا (پلی/پاز/بعدی/قبلی) + کنترل هدست و بلوتوث
 * رزومه‌ی پخش، Seekt، آیکون داینامیک، پوسته‌ی تاریک، رابط **فارسی**
 * دانلود با خود `DownloadManager` (نوتیفیکیشن پیشرفت، ذخیره در `Music/SoundCloudX`)
-* بدون هیچ کتابخانه‌ی بیرونی؛ حجم APK فقط حدود ۱۲۰ کیلوبایت
+* ذخیره‌سازی رمزنگاری‌شده‌ی نشست و علاقه‌مندی‌ها با AndroidX Security
 
 **ویندوز**
 
@@ -86,16 +85,19 @@ android/                      اپ اندروید (Java خالص، Gradle)
   app/src/main/java/com/soundcloudx/app/
     ScApi.java                کلاینت ساندکلاد: کلید، جستجو، ترند، لینک پخش/دانلود
     PlayerService.java        پخش‌کننده‌ی Foreground + MediaSession + نوتیفیکیشن
-    MainActivity.java         صفحه‌ی اصلی: جستجو، لیست، پلیر
+    MainActivity.java         هماهنگ‌کننده‌ی صفحه‌ی اصلی
+    SearchController.java     جستجو، ترندها و لیست نتایج
+    PlayerBar.java            کنترل‌های پخش و وضعیت پخش‌کننده
+    AppDialogs.java           منوها، تنظیمات و دیالوگ‌ها
     LoginActivity.java        ورود با WebView (کوکی‌ها)
     Downloader.java           دانلود با DownloadManager
     Art.java / Fmt.java …     کاورها و کمک‌تابع‌ها
   app/src/main/res/           چیدمان‌ها (تاریک)، آیکون‌ها، متن فارسی/انگلیسی
 
 windows/                      اپ ویندوز (Python + customtkinter + pygame)
-  src/scx/…               api.py، player.py، downloader.py، ui.py، store.py …
+  src/scx/…               api.py، player.py، downloader.py، ui/، store.py …
   SoundCloudX.spec            دستور ساخت exe با PyInstaller
-  selftest.py                 ۴۱ تست آفلاین منطق برنامه
+  selftest.py                 تست‌های آفلاین منطق و رابط کاربری
 
 .github/workflows/build-release.yml   ساخت APK و EXE و ساخت Release
 tools/                        ابزارهای کمکی (تست استاتیک اندروید، ساخت آیکون، نسخه)
@@ -103,17 +105,18 @@ tools/                        ابزارهای کمکی (تست استاتیک �
 
 ## نکات فنی
 
-* **اندروید:** فقط با فریم‌ورک اندروید (`HttpURLConnection` + `org.json` + `WebView`)
-  نوشته شده؛ به همین دلیل هیچ وابستگی خارجی و هیچ مخزن Maven لازم نیست و build کاملاً سبک و قابل تکرار است.
+* **اندروید:** منطق برنامه با فریم‌ورک اندروید (`HttpURLConnection` + `org.json` + `WebView`) نوشته شده است.
+  وابستگی runtime اصلی `androidx.security:security-crypto` برای محافظت از نشست و متادیتای امضاشده است؛ تست‌ها از JUnit/AndroidX Test استفاده می‌کنند.
 * **پخش در اندروید:** `android.media.MediaPlayer` روی همان URL پیش‌رونده‌ی ۱۲۸kbps ساندکلاد.
   از Android 14 به بعد نوع سرویس `mediaPlayback` اعلام شده تا Foreground Service مجاز باشد.
 * **دانلود در اندروید:** از Android 10 به بعد فایل با `MediaStore` در پوشه‌ی
   `Music/SoundCloudX` نوشته می‌شود (بدون نیاز به اجازه‌ی دسترسی).
 * **ویندوز:** پایتون ۳.۸ انتخاب شده چون آخرین نسخه‌ای است که روی ویندوز ۷ اجرا می‌شود؛
   `PyInstaller 5.13` همان نسخه‌ای است که bootloader سازگار با ویندوز ۷ دارد.
-* **تست‌ها:** `python windows/selftest.py --ui` (۴۱ بررسی آفلاین) و
-  `python tools/check_android.py <path-to-android.jar>` (۱۲۱۴ بررسی استاتیک روی
-  کد جاوا: منابع، آیکون‌ها، امضاهای API اندروید و کلاس‌های خودمان).
+* **تست‌ها:** `python windows/selftest.py --ui` و
+  `python tools/check_android.py <path-to-android.jar>`؛ تعداد بررسی‌ها در خروجی هر اجرا ثبت می‌شود.
+  CI علاوه بر ساخت APK/EXE، تست نصب، جستجوی فارسی، پخش، توقف/ادامه، دانلود و حفظ علاقه‌مندی‌ها پس از راه‌اندازی مجدد را روی API 24/34/36 اجرا می‌کند.
+* **حریم خصوصی:** کوکی و `oauth_token` در تنظیمات plaintext ذخیره نمی‌شوند؛ ویندوز از DPAPI و اندروید از ذخیره‌سازی رمزنگاری‌شده استفاده می‌کند. لاگ‌ها کوکی و پارامترهای امضاشده را حذف می‌کنند.
 
 ## تنظیم نسخه و امضا
 
@@ -128,5 +131,6 @@ tools/                        ابزارهای کمکی (تست استاتیک �
 * آهنگ‌هایی که ساندکلاد آن‌ها را «غیرقابل استریم» کرده (مثلاً انحصاری Go+) پخش/دانلود نمی‌شوند.
 * «دانلود فایل اصلی» فقط برای آهنگ‌هایی فعال است که خود خواننده اجازه‌ی دانلود داده باشد،
   و در نسخه‌ی ویندوز نیاز به ورود با حساب دارد.
+* پخش‌کننده‌ی ویندوز از pygame استفاده می‌کند و استریم HLS را پشتیبانی نمی‌کند. ابتدا استریم progressive درخواست می‌شود؛ اگر فقط HLS موجود باشد پیام فارسی نمایش داده می‌شود و پلی‌لیست به‌عنوان MP3 کش نمی‌شود.
 * این یک پروژه‌ی **غیررسمی و متن‌باز** است و هیچ ارتباطی با SoundCloud ندارد.
   مسئولیت استفاده از آن (و رعایت کپی‌رایت اثرها) با کاربر است.

@@ -160,6 +160,11 @@ public class PlayerService extends Service {
     }
 
     @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(LocaleHelper.wrap(base));
+    }
+
+    @Override
     public IBinder onBind(Intent intent) {
         return binder;
     }
@@ -179,17 +184,25 @@ public class PlayerService extends Service {
             }
             Object extra = intent.getSerializableExtra(EXTRA_TRACK);
             Track track = extra instanceof Track ? (Track) extra : null;
+            ScLog.d("onStartCommand cmd=" + cmd + " track=" + (track != null) + " state=" + state);
             if (cmd != null) {
                 handle(cmd, track);
+            }
+            if (state == STATE_IDLE) {
+                stopForegroundCompat();
+                stopSelf();
+                return START_NOT_STICKY;
             }
             // A foreground service started through startForegroundService() has
             // to post its notification quickly (Android 8+), so we always do it
             // here and only take it down again when nothing is queued.
             showNotification();
-            if (state == STATE_IDLE) {
-                stopForegroundCompat();
-                stopSelf();
-            }
+        } else {
+            showNotification();
+        }
+        if (state == STATE_IDLE) {
+            stopForegroundCompat();
+            stopSelf();
         }
         return START_STICKY;
     }
@@ -245,7 +258,8 @@ public class PlayerService extends Service {
     public int getPosition() {
         try {
             return player == null ? 0 : player.getCurrentPosition();
-        } catch (Throwable t) {
+        } catch (Throwable error) {
+            ScLog.e("cannot read playback position", error);
             return 0;
         }
     }
@@ -256,7 +270,8 @@ public class PlayerService extends Service {
             if (d > 0) {
                 return d;
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable error) {
+            ScLog.e("cannot read playback duration", error);
         }
         return current == null ? 0 : current.durationMs;
     }
@@ -264,7 +279,8 @@ public class PlayerService extends Service {
     public boolean isPlaying() {
         try {
             return player != null && player.isPlaying();
-        } catch (Throwable t) {
+        } catch (Throwable error) {
+            ScLog.e("cannot read playing state", error);
             return false;
         }
     }
@@ -324,7 +340,8 @@ public class PlayerService extends Service {
                 if (player.isPlaying()) {
                     player.pause();
                 }
-            } catch (Throwable ignored) {
+            } catch (Throwable error) {
+                ScLog.e("pause failed", error);
             }
         }
         playWhenReady = false;
@@ -337,7 +354,10 @@ public class PlayerService extends Service {
     public void resume() {
         if (player != null) {
             try {
-                requestFocus();
+                if (!requestFocus()) {
+                    fail(new IllegalStateException("audio focus denied"), false);
+                    return;
+                }
                 player.start();
                 setState(STATE_PLAYING);
                 updateSessionState();
@@ -368,7 +388,8 @@ public class PlayerService extends Service {
         if (player != null) {
             try {
                 player.seekTo(Math.max(0, Math.min(ms, getDuration())));
-            } catch (Throwable ignored) {
+            } catch (Throwable error) {
+                ScLog.e("seek failed", error);
             }
         }
     }
@@ -523,12 +544,14 @@ public class PlayerService extends Service {
                             if (token != loadToken) {
                                 try {
                                     mp.release();
-                                } catch (Throwable ignored) {
+                                } catch (Throwable error) {
+                                    ScLog.e("cannot release stale player", error);
                                 }
                                 return;
                             }
                             if (playWhenReady) {
                                 if (!requestFocus()) {
+                                    fail(new IllegalStateException("audio focus denied"), false);
                                     return;
                                 }
                                 mp.start();
@@ -574,13 +597,20 @@ public class PlayerService extends Service {
     }
 
     private void fail(Exception error) {
+        fail(error, true);
+    }
+
+    private void fail(Exception error, boolean allowSkip) {
+        loadToken++; // Cancel any preparation still in flight for the failed player.
+        releasePlayer();
+        abandonFocus();
         message = describe(error);
         ScLog.e("playback failed: " + message, error);
         setState(STATE_ERROR);
         updateSessionState();
         stopForegroundCompat();
         // Automatically skip broken tracks instead of getting stuck.
-        if (autoSkip < 2 && currentIndex + 1 < queue.size()) {
+        if (allowSkip && autoSkip < 2 && currentIndex + 1 < queue.size()) {
             autoSkip++;
             currentIndex++;
             playCurrent(true);
@@ -589,13 +619,19 @@ public class PlayerService extends Service {
 
     private String describe(Exception e) {
         if (e == null) {
-            return "unknown error";
+            return getString(R.string.error_unknown);
         }
         String m = e.getMessage();
-        if (e instanceof ScApi.ApiException || (m != null && m.contains("not streamable"))) {
-            return "not streamable";
+        if (m != null && m.contains("audio focus denied")) {
+            return getString(R.string.error_audio_focus);
         }
-        return m == null ? e.getClass().getSimpleName() : m;
+        if (e instanceof ScApi.ApiException || (m != null && m.contains("not streamable"))) {
+            return getString(R.string.error_not_streamable);
+        }
+        if (e instanceof java.io.IOException) {
+            return getString(R.string.state_network_error);
+        }
+        return getString(R.string.error_media);
     }
 
     private void setState(int newState) {
@@ -608,11 +644,13 @@ public class PlayerService extends Service {
         if (player != null) {
             try {
                 player.reset();
-            } catch (Throwable ignored) {
+            } catch (Throwable error) {
+                ScLog.e("cannot reset player", error);
             }
             try {
                 player.release();
-            } catch (Throwable ignored) {
+            } catch (Throwable error) {
+                ScLog.e("cannot release player", error);
             }
             player = null;
         }
@@ -624,7 +662,7 @@ public class PlayerService extends Service {
     }
 
     private void broadcastState() {
-        Intent i = new Intent(STATE_CHANGED);
+        Intent i = new Intent(STATE_CHANGED).setPackage(getPackageName());
         i.putExtra(EXTRA_STATE, state);
         i.putExtra(EXTRA_MESSAGE, message);
         i.putExtra(EXTRA_PLAYING, isPlaying());
@@ -639,7 +677,7 @@ public class PlayerService extends Service {
     }
 
     private void broadcastProgress() {
-        Intent i = new Intent(STATE_CHANGED);
+        Intent i = new Intent(STATE_CHANGED).setPackage(getPackageName());
         i.putExtra(EXTRA_STATE, state);
         i.putExtra(EXTRA_DURATION, getDuration());
         i.putExtra("position", getPosition());
@@ -651,7 +689,19 @@ public class PlayerService extends Service {
     //  audio focus
     // =======================================================================
 
+    // Debug-only deterministic focus-denial seam used by instrumentation.
+    private Boolean testFocusResult;
+
+    void setTestFocusResult(Boolean result) {
+        if (BuildConfig.DEBUG) {
+            testFocusResult = result;
+        }
+    }
+
     private boolean requestFocus() {
+        if (BuildConfig.DEBUG && testFocusResult != null) {
+            return testFocusResult;
+        }
         if (audio == null) {
             return true;
         }
@@ -682,7 +732,8 @@ public class PlayerService extends Service {
             } else {
                 audio.abandonAudioFocus(focusListener);
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable error) {
+            ScLog.e("cannot abandon audio focus", error);
         }
     }
 
@@ -781,7 +832,7 @@ public class PlayerService extends Service {
         }
         NotificationChannel channel = new NotificationChannel(CHANNEL_ID,
                 getString(R.string.app_name), NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("player");
+        channel.setDescription(getString(R.string.player_notification));
         channel.setShowBadge(false);
         channel.setSound(null, null);
         nm.createNotificationChannel(channel);
@@ -806,12 +857,12 @@ public class PlayerService extends Service {
         PendingIntent contentIntent = PendingIntent.getActivity(this, 1, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification.Action prev = action(android.R.drawable.ic_media_previous, "prev", CMD_PREV, 0, 11);
+        Notification.Action prev = action(android.R.drawable.ic_media_previous, getString(R.string.action_previous), CMD_PREV, 0, 11);
         Notification.Action playPause = isPlaying()
-                ? action(android.R.drawable.ic_media_pause, "pause", CMD_PAUSE, 0, 12)
-                : action(android.R.drawable.ic_media_play, "play", CMD_RESUME, 0, 12);
-        Notification.Action next = action(android.R.drawable.ic_media_next, "next", CMD_NEXT, 0, 13);
-        Notification.Action stop = action(android.R.drawable.ic_menu_close_clear_cancel, "stop", CMD_STOP, 0, 14);
+                ? action(android.R.drawable.ic_media_pause, getString(R.string.action_pause), CMD_PAUSE, 0, 12)
+                : action(android.R.drawable.ic_media_play, getString(R.string.action_play), CMD_RESUME, 0, 12);
+        Notification.Action next = action(android.R.drawable.ic_media_next, getString(R.string.action_play_next), CMD_NEXT, 0, 13);
+        Notification.Action stop = action(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.action_stop), CMD_STOP, 0, 14);
 
         String title = current == null ? getString(R.string.app_name) : current.title;
         String text = current == null ? getString(R.string.state_idle) : current.artist;
@@ -871,14 +922,16 @@ public class PlayerService extends Service {
     private void stopForegroundCompat() {
         try {
             stopForeground(true);
-        } catch (Throwable ignored) {
+        } catch (Throwable error) {
+            ScLog.e("cannot stop foreground notification", error);
         }
         try {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) {
                 nm.cancel(NOTIF_ID);
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable error) {
+            ScLog.e("cannot cancel player notification", error);
         }
     }
 }

@@ -24,6 +24,23 @@ def _fatal(message):
 
 
 def main():
+    if "--smoke-test" in sys.argv:
+        import json
+        from scx.smoke import run
+        report_path = os.environ.get("SCX_SMOKE_REPORT", "smoke-report.json")
+        with open(report_path, "w", encoding="utf-8") as stream:
+            json.dump({"success": False, "stage": "bootstrap"}, stream)
+        try:
+            report = run()
+            with open(report_path, "w", encoding="utf-8") as stream:
+                json.dump(report, stream, ensure_ascii=False, indent=2)
+            return 0
+        except Exception:
+            # The report contains no credentials or signed request URLs.
+            with open(report_path, "w", encoding="utf-8") as stream:
+                json.dump({"success": False, "error": traceback.format_exc()}, stream, indent=2)
+            return 1
+
     # PyInstaller one-file builds start in a temporary folder.
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:

@@ -11,6 +11,7 @@ android {
     compileSdk 34
 
     defaultConfig {
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         applicationId "com.soundcloudx.app"
         minSdk 24          // Android 7.0 (Nougat) ... Android 15 / 16
         targetSdk 34
@@ -54,6 +55,10 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
     buildFeatures {
         buildConfig true
     }
@@ -71,7 +76,14 @@ android {
 }
 
 dependencies {
-    // Intentionally no external dependencies: the app uses only the Android
-    // framework (HttpURLConnection + org.json + WebView), which keeps the APK
-    // small (~1 MB) and makes the build 100% reproducible offline.
+    // AndroidX Security uses the hardware-backed Android Keystore for cookies
+    // and signed track metadata. All other app logic remains framework-only.
+    implementation 'androidx.security:security-crypto:1.1.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
+    androidTestImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
 }

@@ -1,6 +1,7 @@
 package com.soundcloudx.app;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Bundle;
@@ -28,6 +29,11 @@ public class LoginActivity extends Activity {
     private ProgressBar progress;
     private TextView info;
     private boolean finished;
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(LocaleHelper.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -85,7 +91,11 @@ public class LoginActivity extends Activity {
         if (!TextUtils.isEmpty(cookie) && cookie.contains("oauth_token")) {
             finished = true;
             CookieManager.getInstance().flush();
-            ScApi.refreshCookies(this);
+            if (!ScApi.refreshCookies(this)) {
+                finished = false;
+                info.setText(R.string.error_storage);
+                return;
+            }
             ScLog.d("login successful");
             setResult(RESULT_OK, new Intent());
             // Give the cookie store a moment, then hand control back.

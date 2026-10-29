@@ -77,7 +77,7 @@
             android:singleLine="true"
             android:textColor="@color/text"
             android:textColorHint="@color/text_dim"
-            android:textDirection="ltr"
+            android:textDirection="firstStrong"
             android:textSize="13sp" />
 
         <Button

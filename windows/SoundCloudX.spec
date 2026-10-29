@@ -7,12 +7,15 @@ block_cipher = None
 hidden = [
     "scx", "scx.api", "scx.downloader", "scx.models", "scx.player",
     "scx.store", "scx.strings", "scx.ui", "scx.util", "scx.version",
+    "scx.credentials", "scx.diagnostics", "scx.media_cache", "scx.smoke",
+    "scx.ui.app", "scx.ui.lists", "scx.ui.playback", "scx.ui.downloads",
+    "scx.ui.dialogs", "scx.ui.settings", "scx.ui.constants",
 ]
 
 # Things that must never end up inside a 30 MB downloader.
 excludes = [
     "numpy", "matplotlib", "scipy", "pandas", "test", "unittest",
-    "setuptools", "pip", "wheel", "email", "http.server", "xmlrpc",
+    "setuptools", "pip", "wheel", "http.server", "xmlrpc",
     "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
     "PIL.ImageQt", "PIL.ImageTk", "PIL.ImageShow",
     "curses", "distutils", "lib2to3", "pydoc_data",

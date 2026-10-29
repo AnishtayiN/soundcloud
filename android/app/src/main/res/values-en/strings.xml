@@ -62,4 +62,22 @@
     <string name="status_playing">Playing: %1$s</string>
     <string name="status_loading_track">Loading: %1$s</string>
     <string name="about_text">SoundCloud X %1$s\n\nSoundCloud downloader, search and player\n• Search &amp; trending\n• Online and background playback\n• MP3 and original file download\n• Favorites and play queue\n\nUnofficial open-source client, not affiliated with SoundCloud.</string>
+    <string name="error_unknown">An unknown error occurred; please try again</string>
+    <string name="error_audio_focus">Playback could not start because another app is using audio. Stop it and try again.</string>
+    <string name="error_not_streamable">This track is not streamable due to SoundCloud restrictions or Go+</string>
+    <string name="error_media">This audio file cannot be played; please try again</string>
+    <string name="player_notification">Music player</string>
+    <string name="action_previous">Previous track</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_stop">Stop</string>
+    <string name="menu_settings">Settings</string>
+    <string name="allow_roaming">Download while roaming</string>
+    <string name="roaming_description">Keep this off to prevent downloads while roaming.</string>
+    <string name="toast_download_duplicate">This track is already downloaded or queued</string>
+    <string name="toast_download_complete">Track download completed</string>
+    <string name="error_storage">Secure storage is unavailable; sign-in was not saved</string>
+    <string name="language">App language</string>
+    <string name="language_fa">فارسی</string>
+    <string name="language_en">English</string>
+    <string name="error_save">Settings could not be saved; the previous version was retained</string>
 </resources>

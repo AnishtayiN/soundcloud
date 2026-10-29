@@ -45,6 +45,8 @@ public class Track implements Serializable {
         JSONObject user = o.optJSONObject("user");
         if (user != null) {
             t.artist = str(user.optString("username", ""));
+        } else {
+            t.artist = str(o.optString("artist", ""));
         }
 
         String art = str(o.optString("artwork_url", ""));
@@ -69,7 +71,10 @@ public class Track implements Serializable {
             o.put("streamable", streamable);
             o.put("downloadable", downloadable);
             o.put("policy", policy);
-        } catch (Exception ignored) {
+            o.put("track_authorization", trackAuth);
+            o.put("download_url", downloadUrl);
+        } catch (Exception error) {
+            ScLog.e("cannot serialize track", error);
         }
         return o;
     }
