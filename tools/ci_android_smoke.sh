@@ -19,7 +19,7 @@ adb install -r testing/SoundCloudX-1.0.0-debug-androidTest.apk
 adb shell settings put global window_animation_scale 0
 adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
-adb shell am instrument -w -r -e class com.soundcloudx.app.ReliabilityTest com.soundcloudx.app.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrumentation.txt
+adb shell am instrument -w -r com.soundcloudx.app.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrumentation.txt
 grep -q 'INSTRUMENTATION_CODE: -1' instrumentation.txt
 if grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=' instrumentation.txt; then exit 1; fi
 package=com.soundcloudx.app.debug

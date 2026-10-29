@@ -84,7 +84,7 @@ class Downloader(object):
             headers = {"Accept-Encoding": "identity"}
             if done:
                 headers["Range"] = "bytes=%d-" % done
-                if meta.get("etag"):
+                if meta.get("etag") and not meta["etag"].startswith("W/"):
                     headers["If-Range"] = meta["etag"]
                 elif meta.get("last_modified"):
                     headers["If-Range"] = meta["last_modified"]
@@ -185,9 +185,11 @@ class Downloader(object):
             except Exception as error:
                 failed("close download response", error)
 
-    def download_track(self, url, folder, filename, on_progress=None, cancel_event=None):
+    def download_track(self, url, folder, filename, on_progress=None, cancel_event=None,
+                       verify_audio=True):
         target = util.unique_path(folder, filename)
-        return self.fetch_to(url, target, on_progress=on_progress, cancel_event=cancel_event)
+        return self.fetch_to(url, target, on_progress=on_progress, cancel_event=cancel_event,
+                             verify_audio=verify_audio)
 
 
 class DownloadJob(object):

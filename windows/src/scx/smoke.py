@@ -107,7 +107,12 @@ def run():
             report["checks"].append("pause-resume")
             app.toggle_favorite_current()
             app.start_download(app.now_playing)
-            pump(15, lambda: bool(app.download_jobs) and app.download_jobs[0].state == "done")
+            try:
+                pump(15, lambda: bool(app.download_jobs) and app.download_jobs[0].state == "done")
+            except AssertionError:
+                job = app.download_jobs[0] if app.download_jobs else None
+                raise AssertionError("download smoke state=%s error=%s" %
+                                     (getattr(job, "state", None), getattr(job, "error", None)))
             assert os.path.getsize(app.download_jobs[0].path) == len(wav)
             report["checks"].append("complete-download")
         finally:

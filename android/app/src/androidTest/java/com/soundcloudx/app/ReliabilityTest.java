@@ -73,6 +73,10 @@ public class ReliabilityTest {
         server.setDispatcher(new Dispatcher() {
             @Override public MockResponse dispatch(RecordedRequest request) {
                 String path = request.getPath();
+                if (path.contains("q=stale-old")) {
+                    try { Thread.sleep(3000); }
+                    catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+                }
                 if (path.endsWith(".wav")) {
                     return new MockResponse().setHeader("Content-Type", "audio/wav")
                             .setHeader("Content-Length", wav.length).setBody(new Buffer().write(wav));
@@ -90,7 +94,7 @@ public class ReliabilityTest {
                     return new MockResponse().setResponseCode(302)
                             .setHeader("Location", server.url("/audio.wav").toString());
                 }
-                String id = path.contains("222") ? "222" : "111";
+                String id = path.contains("222") || path.contains("q=stale-old") ? "222" : "111";
                 String title = id.equals("111") ? "آهنگ آزمایشی" : "آهنگ دوم";
                 String track = "{\"id\":" + id + ",\"title\":\"" + title
                         + "\",\"duration\":8000,\"streamable\":true,\"downloadable\":true,"
@@ -236,6 +240,20 @@ public class ReliabilityTest {
         } finally {
             if (Build.VERSION.SDK_INT >= 26) audio.abandonAudioFocusRequest(hold);
             else audio.abandonAudioFocus(null);
+        }
+    }
+
+    @Test public void staleSearchCannotOverwriteNewerSearch() throws Exception {
+        try (ActivityScenario<MainActivity> ignored = ActivityScenario.launch(MainActivity.class)) {
+            assertNotNull(device.wait(Until.findObject(By.res(packageName, "editSearch")), 15000));
+            device.findObject(By.res(packageName, "editSearch")).setText("stale-old");
+            click("btnSearch");
+            device.findObject(By.res(packageName, "editSearch")).setText("stale-new");
+            click("btnSearch");
+            assertNotNull(device.wait(Until.findObject(By.text("آهنگ آزمایشی")), 15000));
+            Thread.sleep(3500);
+            assertNull("late old response replaced the newer rows", device.findObject(By.text("آهنگ دوم")));
+            assertNotNull(device.findObject(By.text("آهنگ آزمایشی")));
         }
     }
 
