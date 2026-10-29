@@ -4,25 +4,23 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.text.TextUtils;
 
+import androidx.security.crypto.EncryptedSharedPreferences;
+import androidx.security.crypto.MasterKey;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** Persisted settings, cached client_id and favorites. */
+/** Ordinary settings stay in JSON/preferences; credentials and signed favorites do not. */
 public final class Prefs {
-
     private static final String NAME = "soundcloud_x";
+    private static final String SECURE_NAME = "soundcloud_x_secure";
+    private static Prefs sInstance;
 
     private final SharedPreferences sp;
-
-    public Prefs(Context ctx) {
-        sp = ctx.getApplicationContext().getSharedPreferences(NAME, Context.MODE_PRIVATE);
-    }
-
-    /** Shared instance to keep WebView-free access cheap. */
-    private static Prefs sInstance;
+    private SharedPreferences secure;
 
     public static synchronized Prefs get(Context ctx) {
         if (sInstance == null) {
@@ -31,7 +29,47 @@ public final class Prefs {
         return sInstance;
     }
 
-    // ------------------------------------------------------------- client id --
+    public Prefs(Context ctx) {
+        Context app = ctx.getApplicationContext();
+        sp = app.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+        try {
+            MasterKey key = new MasterKey.Builder(app)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build();
+            secure = EncryptedSharedPreferences.create(app, SECURE_NAME, key,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
+            migrateSecrets();
+        } catch (Exception error) {
+            secure = null;
+            // Never fall back to plaintext credentials. Old non-secret favorites
+            // remain readable until they can be migrated without data loss.
+            sp.edit().remove("cookie_header").remove("oauth_token").commit();
+            ScLog.e("secure credential storage unavailable", error);
+        }
+    }
+
+    private void migrateSecrets() {
+        SharedPreferences.Editor target = secure.edit();
+        if (sp.contains("cookie_header") && !secure.contains("cookie_header")) {
+            target.putString("cookie_header", sp.getString("cookie_header", ""));
+        }
+        if (sp.contains("favorites") && !secure.getBoolean("favorites_migrated", false)) {
+            target.putString("favorites", sp.getString("favorites", "[]"));
+            target.putBoolean("favorites_migrated", true);
+        }
+        if (!target.commit()) {
+            throw new IllegalStateException("credential migration commit failed");
+        }
+        // commit(), not apply(): plaintext must be gone before login/API work continues.
+        if (!sp.edit().remove("cookie_header").remove("oauth_token").remove("favorites").commit()) {
+            ScLog.e("could not remove legacy plaintext storage");
+        }
+    }
+
+    public boolean secureStorageAvailable() {
+        return secure != null;
+    }
+
     public String clientId() {
         return sp.getString("client_id", "");
     }
@@ -41,69 +79,93 @@ public final class Prefs {
     }
 
     public void saveClientId(String id) {
-        sp.edit().putString("client_id", id).putLong("client_id_time", System.currentTimeMillis()).apply();
+        sp.edit().putString("client_id", id)
+                .putLong("client_id_time", System.currentTimeMillis()).apply();
     }
 
-    // --------------------------------------------------------------- cookies --
+    public synchronized void clearClientId(String rejected) {
+        if (rejected == null || rejected.equals(clientId())) {
+            sp.edit().remove("client_id").putLong("client_id_time", 0L).commit();
+        }
+    }
+
     public String cookieHeader() {
-        return sp.getString("cookie_header", "");
+        return secure == null ? "" : secure.getString("cookie_header", "");
     }
 
-    public void saveCookieHeader(String cookie) {
-        sp.edit().putString("cookie_header", cookie == null ? "" : cookie).apply();
+    public boolean saveCookieHeader(String cookie) {
+        if (secure == null) {
+            return false;
+        }
+        return secure.edit().putString("cookie_header", cookie == null ? "" : cookie).commit();
     }
 
     public boolean isLoggedIn() {
-        String c = cookieHeader();
-        return !TextUtils.isEmpty(c) && c.contains("oauth_token");
+        String cookie = cookieHeader();
+        return !TextUtils.isEmpty(cookie) && cookie.matches("(?s).*\\boauth_token=[^;\\s]+.*");
     }
 
-    // -------------------------------------------------------------- language --
     public String language() {
-        return sp.getString("language", "fa");
+        String value = sp.getString("language", "fa");
+        return "en".equals(value) ? "en" : "fa";
     }
 
     public void setLanguage(String lang) {
-        sp.edit().putString("language", lang).apply();
+        sp.edit().putString("language", "en".equals(lang) ? "en" : "fa").apply();
     }
 
-    // ------------------------------------------------------------ favorites ---
-    public List<Track> favorites() {
+    public boolean allowRoaming() {
+        return sp.getBoolean("allow_roaming", false);
+    }
+
+    public void setAllowRoaming(boolean value) {
+        sp.edit().putBoolean("allow_roaming", value).apply();
+    }
+
+    public synchronized List<Track> favorites() {
         List<Track> out = new ArrayList<>();
-        String raw = sp.getString("favorites", "[]");
+        String raw = secure != null && secure.getBoolean("favorites_migrated", false)
+                ? secure.getString("favorites", "[]") : sp.getString("favorites", "[]");
         try {
             JSONArray arr = new JSONArray(raw);
             for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.optJSONObject(i);
-                Track t = Track.fromJson(o);
-                if (t != null && t.id != 0) {
-                    out.add(t);
+                Track track = Track.fromJson(arr.optJSONObject(i));
+                if (track != null && track.id != 0) {
+                    out.add(track);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            ScLog.e("cannot read favorites", error);
         }
         return out;
     }
 
-    public void saveFavorites(List<Track> tracks) {
-        JSONArray arr = new JSONArray();
-        for (Track t : tracks) {
-            arr.put(t.toJson());
+    public synchronized void saveFavorites(List<Track> tracks) {
+        if (secure == null) {
+            throw new IllegalStateException("secure storage unavailable");
         }
-        sp.edit().putString("favorites", arr.toString()).apply();
+        JSONArray arr = new JSONArray();
+        for (Track track : tracks) {
+            arr.put(track.toJson());
+        }
+        boolean saved = secure.edit().putString("favorites", arr.toString())
+                .putBoolean("favorites_migrated", true).commit();
+        if (!saved) {
+            throw new IllegalStateException("favorites commit failed");
+        }
+        sp.edit().remove("favorites").commit();
     }
 
     public boolean isFavorite(long id) {
-        for (Track t : favorites()) {
-            if (t.id == id) {
+        for (Track track : favorites()) {
+            if (track.id == id) {
                 return true;
             }
         }
         return false;
     }
 
-    /** @return true when the track was added, false when it was removed. */
-    public boolean toggleFavorite(Track track) {
+    public synchronized boolean toggleFavorite(Track track) {
         List<Track> list = favorites();
         for (int i = 0; i < list.size(); i++) {
             if (list.get(i).id == track.id) {
@@ -128,13 +190,12 @@ public final class Prefs {
         saveFavorites(list);
     }
 
-    // ------------------------------------------------------------- last query --
     public String lastQuery() {
         return sp.getString("last_query", "");
     }
 
-    public void saveLastQuery(String q) {
-        sp.edit().putString("last_query", q == null ? "" : q).apply();
+    public void saveLastQuery(String query) {
+        sp.edit().putString("last_query", query == null ? "" : query).apply();
     }
 
     public int lastGenre() {
@@ -145,41 +206,58 @@ public final class Prefs {
         sp.edit().putInt("last_genre", index).apply();
     }
 
-    // ------------------------------------------------------------ downloads ---
-    public void addDownload(long id, String name, String title, String artist) {
+    public synchronized void addDownload(long id, String name, String title, String artist) {
         try {
             JSONArray arr = downloads();
-            JSONObject o = new JSONObject();
-            o.put("id", id);
-            o.put("name", name);
-            o.put("title", title);
-            o.put("artist", artist);
-            o.put("time", System.currentTimeMillis());
-            arr.put(o);
+            JSONObject item = new JSONObject();
+            item.put("id", id);
+            item.put("name", name);
+            item.put("title", title);
+            item.put("artist", artist);
+            item.put("time", System.currentTimeMillis());
+            arr.put(item);
             sp.edit().putString("downloads", arr.toString()).apply();
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            ScLog.e("cannot save download metadata", error);
         }
     }
 
-    public void removeDownload(long id) {
+    /** Replace the staging record atomically with respect to other app threads. */
+    public synchronized void putDownload(JSONObject item) {
         try {
-            JSONArray arr = downloads();
-            JSONArray out = new JSONArray();
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o != null && o.optLong("id") != id) {
-                    out.put(o);
+            JSONArray input = downloads();
+            JSONArray output = new JSONArray();
+            long id = item.optLong("id");
+            for (int i = 0; i < input.length(); i++) {
+                JSONObject old = input.optJSONObject(i);
+                if (old != null && old.optLong("id") != id) {
+                    output.put(old);
                 }
             }
-            sp.edit().putString("downloads", out.toString()).apply();
-        } catch (Exception ignored) {
+            output.put(item);
+            sp.edit().putString("downloads", output.toString()).commit();
+        } catch (Exception error) {
+            ScLog.e("cannot update download metadata", error);
         }
+    }
+
+    public synchronized void removeDownload(long id) {
+        JSONArray input = downloads();
+        JSONArray output = new JSONArray();
+        for (int i = 0; i < input.length(); i++) {
+            JSONObject item = input.optJSONObject(i);
+            if (item != null && item.optLong("id") != id) {
+                output.put(item);
+            }
+        }
+        sp.edit().putString("downloads", output.toString()).apply();
     }
 
     public JSONArray downloads() {
         try {
             return new JSONArray(sp.getString("downloads", "[]"));
-        } catch (Exception e) {
+        } catch (Exception error) {
+            ScLog.e("cannot read download history", error);
             return new JSONArray();
         }
     }

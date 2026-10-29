@@ -90,6 +90,9 @@ class FakeResponse(object):
         self._json = json_data
         self._chunks = chunks
 
+    def close(self):
+        pass
+
     def json(self):
         if self._json is not None:
             return self._json
@@ -114,10 +117,12 @@ class FakeSession(object):
         self.headers = {}
         self.routes = routes or {}
         self.calls = []
+        self.requests = []
 
     def get(self, url, **kwargs):
         """Routes are URL prefixes, the most specific one wins."""
         self.calls.append(url)
+        self.requests.append((url, kwargs))
         best_key = None
         best_value = None
         for key, value in self.routes.items():
@@ -302,6 +307,232 @@ def test_player():
     check("measure_duration of junk is 0", Player.measure_duration(__file__) == 0)
 
 
+def test_regressions():
+    section("P0 regressions")
+    import threading
+    import wave
+    import io
+    from unittest import mock
+    from scx.api import SoundCloud, AuthorizationError, HOME
+    from scx.credentials import CredentialError
+    from scx.downloader import Downloader, IncompleteDownload
+    from scx.media_cache import MediaCache
+    from scx.models import Track
+    from scx.store import Store
+    from scx.ui.playback import PlaybackMixin
+    from scx.ui.lists import ListsMixin
+
+    class MemoryVault(object):
+        def __init__(self):
+            self.values = {}
+        def get(self, key):
+            return self.values.get(key, "")
+        def set(self, key, value):
+            self.values[key] = value
+        def delete(self, key):
+            self.values.pop(key, None)
+        def clear(self):
+            self.values.clear()
+
+    class UiStub(object):
+        play_token = 0
+        lang = "fa"
+        def __init__(self):
+            self.messages = []
+            self.play_cancel = threading.Event()
+            self.api = mock.Mock()
+            self.media_cache = mock.Mock()
+        def set_status(self, message):
+            self.messages.append(message)
+        def T(self, key, *args):
+            from scx.strings import translate
+            return translate("fa", key, *args)
+        def show_progress(self, *args):
+            pass
+        def run_bg(self, work, done, failed):
+            raise AssertionError("unstreamable track must return before background work")
+
+    with tempfile.TemporaryDirectory() as folder:
+        vault = MemoryVault()
+        store = Store(os.path.join(folder, "settings.json"), credentials=vault)
+        track = Track.from_json(dict(TRACK_A, download_url="https://api.soundcloud.com/tracks/111/download"))
+        restored = Track(**json.loads(json.dumps(track.to_json())))
+        check("authorization survives JSON round trip", restored.track_authorization == track.track_authorization)
+        check("download URL survives JSON round trip", restored.download_url == track.download_url)
+        check("artist survives JSON round trip", restored.artist == track.artist)
+        ui = UiStub()
+        PlaybackMixin.play_track(ui, Track.from_json(dict(TRACK_B, streamable=False)))
+        check("unstreamable track never reaches API/cache", ui.api.stream_url.call_count == 0
+              and ui.media_cache.get_or_fetch.call_count == 0 and ui.play_token == 0)
+        check("unstreamable message is Persian", ui.messages == ["این آهنگ قابل پخش نیست"])
+
+        # A tiny but structurally valid WAV, not arbitrary bytes with an .mp3 suffix.
+        audio = io.BytesIO()
+        with wave.open(audio, "wb") as wav:
+            wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(8000)
+            wav.writeframes(b"\x00\x00" * 8000)
+        wav_bytes = audio.getvalue()
+        check("default playback cache budget is 500 MB", Store(os.path.join(folder, "defaults.json"),
+              credentials=MemoryVault()).get("cache_limit_mb") == 500)
+        cache = MediaCache(os.path.join(folder, "cache"), Downloader(FakeSession()), 1)
+        cached = cache.path_for(track, "https://cdn.example/audio?token=secret")
+        with open(cached, "wb") as stream:
+            stream.write(b"broken" * 2000)
+        check("corrupt cache rejected", not cache.validate(cached))
+        hls = cache.path_for(track, "https://cdn.example/playlist.m3u8?token=secret")
+        check("HLS has track/type-specific playlist suffix", hls.endswith("scx-111-hls.m3u8"))
+        with open(hls, "wb") as stream:
+            stream.write(b"#EXTM3U\n#EXTINF:1,\nsegment.aac\n#EXT-X-ENDLIST\n")
+        check("HLS playlist is not decoded as MP3", cache.validate(hls))
+        session = FakeSession({"https://cdn.example/audio": FakeResponse(content=wav_bytes,
+                               headers={"Content-Length": str(len(wav_bytes))})})
+        cache.downloader = Downloader(session)
+        result = cache.get_or_fetch(track, "https://cdn.example/audio")
+        check("corrupt cache replaced with playable audio", result == cached and cache.validate(result))
+        check("valid cache reused without request", cache.get_or_fetch(track, "https://cdn.example/audio") == result
+              and len(session.calls) == 1)
+        for index in range(3):
+            path = os.path.join(cache.folder, "scx-%d-progressive.mp3" % (900 + index))
+            with open(path, "wb") as stream:
+                stream.write(b"x" * (450 * 1024))
+            os.utime(path, (index + 1, index + 1))
+        cache.trim()
+        size = sum(os.path.getsize(os.path.join(cache.folder, name)) for name in os.listdir(cache.folder))
+        check("500 MB default / configured byte budget enforced", size <= 1024 * 1024, str(size))
+
+        target = os.path.join(folder, "download.wav")
+        short = FakeResponse(content=wav_bytes[:-100], headers={"Content-Length": str(len(wav_bytes))})
+        downloader = Downloader(FakeSession({"https://cdn.example/file": short}))
+        try:
+            with mock.patch("scx.downloader.CHUNK", 64):
+                downloader.fetch_to("https://cdn.example/file", target)
+            check("short download rejected", False)
+        except IncompleteDownload:
+            check("short download rejected", not os.path.exists(target) and os.path.exists(target + ".part"))
+        remaining = wav_bytes[-100:]
+        resume_session = FakeSession()
+        def resume(url, **kwargs):
+            sent = resume_session.requests[-1][1]
+            check("resume sends HTTP Range", sent.get("headers", {}).get("Range") == "bytes=%d-" % (len(wav_bytes)-100))
+            return FakeResponse(206, content=remaining, headers={"Content-Length": str(len(remaining)),
+                                "Content-Range": "bytes %d-%d/%d" % (len(wav_bytes)-100, len(wav_bytes)-1, len(wav_bytes))})
+        resume_session.routes["https://cdn.example/file"] = resume
+        downloader = Downloader(resume_session)
+        downloader.fetch_to("https://cdn.example/file", target)
+        check("Range resume completes exact bytes", open(target, "rb").read() == wav_bytes)
+        check("resume metadata removed", not os.path.exists(target + ".part.json"))
+        ignored = FakeResponse(200, content=wav_bytes, headers={"Content-Length": str(len(wav_bytes))})
+        with open(target + ".part", "wb") as stream:
+            stream.write(b"old")
+        Downloader(FakeSession({"https://cdn.example/file": ignored})).fetch_to("https://cdn.example/file", target)
+        check("server ignoring Range restarts safely", open(target, "rb").read() == wav_bytes)
+
+        store.toggle_favorite(track)
+        store.set("volume", 0.65)
+        backup_volume = json.load(open(store.backup_path, encoding="utf-8"))["volume"]
+        with open(store.path, "w", encoding="utf-8") as stream:
+            stream.write("{broken settings")
+        recovered = Store(store.path, credentials=vault)
+        check("corrupt settings restored from .bak", recovered.recovered_backup
+              and recovered.is_favorite(track.id) and recovered.get("volume") == backup_volume)
+        check("backup recovery itself persisted", Store(store.path, credentials=vault).is_favorite(track.id))
+        before = open(store.path, "rb").read()
+        with mock.patch("scx.store.os.replace", side_effect=OSError("disk full")):
+            try:
+                recovered.set("volume", 0.1)
+                check("save failure reported", False)
+            except OSError:
+                check("save failure reported", True)
+        check("atomic failure preserves settings", open(store.path, "rb").read() == before)
+        check("failed setting rolled back in memory", recovered.get("volume") == backup_volume)
+        legacy = os.path.join(folder, "legacy.json")
+        with open(legacy, "w", encoding="utf-8") as stream:
+            json.dump({"cookie_header": "oauth_token=SECRET", "favorites": [track.to_json()]}, stream)
+        with open(legacy + ".bak", "w", encoding="utf-8") as stream:
+            json.dump({"cookie_header": "oauth_token=OLD_SECRET", "favorites": []}, stream)
+        migrated_vault = MemoryVault()
+        migrated = Store(legacy, credentials=migrated_vault)
+        check("legacy cookie migrated to vault", migrated_vault.get("cookie_header") == "oauth_token=SECRET")
+        check("legacy plaintext removed from primary and backup", "SECRET" not in open(legacy).read()
+              and "SECRET" not in open(legacy + ".bak").read())
+        check("migration preserves favorites", migrated.is_favorite(track.id))
+        migrated.set("cookie_header", "")
+        Store(legacy, credentials=migrated_vault)
+        check("migration cannot resurrect backed-up login after logout", migrated_vault.get("cookie_header") == "")
+
+        # All candidates, including later HTML and JS matches, are validated.
+        old = "a" * 32; stale = "b" * 32; fresh = "c" * 32; js_id = "d" * 32
+        home = 'client_id="%s" clientId:"%s" client_id=%s <script src="https://a-v2.sndcdn.com/app.js"></script>' % (old, stale, fresh)
+        def validation(url):
+            return FakeResponse(json_data={"collection": []}) if url.endswith(js_id) else FakeResponse(403)
+        routes = {HOME: FakeResponse(text=home),
+                  "https://a-v2.sndcdn.com/app.js": FakeResponse(text="client_id='%s'" % js_id),
+                  "https://api-v2.soundcloud.com/search/tracks": validation}
+        api = SoundCloud(Store(os.path.join(folder, "api.json"), credentials=MemoryVault()), session=FakeSession(routes))
+        check("scraper tries every HTML and JS candidate", api.client_id == js_id)
+        check("scraper has no unused ids accumulator", all(len(x) == 32 for x in api._candidates(home)))
+
+        for operation in ("search", "charts", "stream", "original"):
+            calls = []
+            api = SoundCloud(session=FakeSession())
+            api._client_id = old; api._client_time = time.time()
+            def scrape(rejected=None):
+                check(operation + " invalidates rejected id", rejected == old and api._client_id is None)
+                return fresh
+            api._scrape_client_id = scrape
+            def respond(url, **kwargs):
+                calls.append(url)
+                if len(calls) == 1:
+                    return FakeResponse(401)
+                if operation == "stream":
+                    return FakeResponse(302, headers={"Location": "https://cdn.example/a.mp3"})
+                if operation == "original":
+                    return FakeResponse(302, headers={"Location": "https://cdn.example/a.wav"})
+                return FakeResponse(json_data={"collection": [TRACK_A]})
+            api.session = FakeSession({"https://": respond})
+            if operation == "search": api.search("test")
+            elif operation == "charts": api.charts()
+            elif operation == "stream": api.stream_url(track)
+            else: api.download_url(track, True)
+            check(operation + " retries 401 exactly once with fresh id", len(calls) == 2
+                  and old in calls[0] and fresh in calls[1] and fresh not in calls[0])
+
+        # A stalled validation must not hold the client-id cache lock.
+        api = SoundCloud(session=FakeSession())
+        entered = threading.Event(); release = threading.Event(); outcomes = []
+        def stalled(url, **kwargs):
+            entered.set(); release.wait(3)
+            return FakeResponse(json_data={"collection": []})
+        api.session.get = stalled
+        worker = threading.Thread(target=lambda: outcomes.append(api._valid_client_id(old)))
+        worker.start(); entered.wait(2)
+        acquired = api._id_lock.acquire(timeout=0.2)
+        if acquired: api._id_lock.release()
+        release.set(); worker.join(3)
+        check("client-id lock excludes network work", acquired and outcomes == [True])
+
+        class ListStub(ListsMixin):
+            PAGE_SIZE = 30
+            def __init__(self):
+                self.busy = False; self._closing = False; self.list_generation = 0
+                self._load_lock = threading.Lock(); self.mode = "search"; self.query = "old"
+                self.offset = 0; self.jobs = []; self.rendered = []; self.errors = []
+            def set_status(self, text): self.status = text
+            def T(self, key, *args): return key
+            def show_progress(self, *args, **kwargs): pass
+            def _genre_slug(self): return "all-music"
+            def run_bg(self, work, done, failed): self.jobs.append((done, failed))
+            def _render_tracks(self, tracks, append): self.rendered.append((tracks, append))
+        lists = ListStub(); lists.api = mock.Mock()
+        lists.load_page(False); lists.query = "new"; lists.load_page(False)
+        lists.jobs[0][0]([Track.from_json(TRACK_B)])
+        lists.jobs[0][1]("old error")
+        check("stale search cannot render or clear busy state", not lists.rendered and lists.busy)
+        new_track = Track.from_json(TRACK_A)
+        lists.jobs[1][0]([new_track])
+        check("newest search wins", lists.rendered == [([new_track], False)] and not lists.busy)
+
+
 def test_ui():
     section("ui")
     try:
@@ -317,7 +548,12 @@ def test_ui():
     from scx.api import SoundCloud
     from scx.store import Store
     with tempfile.TemporaryDirectory() as folder:
-        store = Store(os.path.join(folder, "settings.json"))
+        from scx.credentials import CredentialError
+        class UiVault(object):
+            value = ""
+            def get(self, key): return self.value
+            def set(self, key, value): self.value = value
+        store = Store(os.path.join(folder, "settings.json"), credentials=UiVault())
         api = SoundCloud(store, session=FakeSession(make_routes()))
         try:
             app = App(api, store, auto_load=False)
@@ -368,7 +604,7 @@ def test_ui():
 
 def main(argv):
     print("SoundCloud X self test")
-    tests = [test_util, test_models, test_store, test_api, test_downloader, test_player]
+    tests = [test_util, test_models, test_store, test_api, test_downloader, test_player, test_regressions]
     if "--ui" in argv:
         tests.append(test_ui)
     for test in tests:

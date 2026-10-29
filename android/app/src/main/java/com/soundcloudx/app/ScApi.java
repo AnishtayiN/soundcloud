@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -72,6 +73,22 @@ public final class ScApi {
     };
 
     private static final String SOUNDCLOUD_HOME = "https://soundcloud.com/";
+    private static String testApiV1;
+    private static String testApiV2;
+    private static String testHome;
+
+    // Package-private test seam, compiled to a rejecting operation in release.
+    static void setTestEndpoints(String home, String v1, String v2) {
+        if (!BuildConfig.DEBUG) {
+            throw new IllegalStateException("test endpoints are disabled in release");
+        }
+        testHome = home;
+        testApiV1 = v1;
+        testApiV2 = v2;
+    }
+    private static String apiV1() { return testApiV1 == null ? API_V1 : testApiV1; }
+    private static String apiV2() { return testApiV2 == null ? API_V2 : testApiV2; }
+    private static String home() { return testHome == null ? SOUNDCLOUD_HOME : testHome; }
 
     private static final Pattern P_JS = Pattern.compile(
             "https://[a-zA-Z0-9.\\-]*sndcdn\\.com/[a-zA-Z0-9._/\\-]+\\.js");
@@ -87,8 +104,11 @@ public final class ScApi {
 
     private static final long CLIENT_ID_TTL_MS = 6L * 60L * 60L * 1000L;
 
-    private static String sClientId;
+    // LOCK protects cached values only. Network discovery/validation is outside it.
+    private static volatile String sClientId;
+    private static volatile long sClientTime;
     private static final Object LOCK = new Object();
+    private static final AtomicLong CLIENT_GENERATION = new AtomicLong();
 
     private ScApi() {
     }
@@ -100,14 +120,31 @@ public final class ScApi {
     public static class ApiException extends IOException {
         private static final long serialVersionUID = 1L;
 
+        public final int statusCode;
+
         public ApiException(String message) {
+            this(message, 0);
+        }
+
+        public ApiException(String message, int statusCode) {
             super(message);
+            this.statusCode = statusCode;
+        }
+
+        public boolean isAuthorizationFailure() {
+            return statusCode == 401 || statusCode == 403;
         }
     }
 
     // =======================================================================
     //  very small http layer
     // =======================================================================
+
+    private static boolean isSoundCloudHost(URL url) {
+        String host = url.getHost();
+        return "https".equals(url.getProtocol())
+                && ("soundcloud.com".equals(host) || host.endsWith(".soundcloud.com"));
+    }
 
     private static String httpGet(Context ctx, String url, boolean withCookies) throws IOException {
         return httpGet(ctx, url, withCookies, 5);
@@ -129,7 +166,7 @@ public final class ScApi {
                 c.setRequestProperty("Accept", "application/json, text/html, */*");
                 c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
                 c.setRequestProperty("Accept-Encoding", "gzip");
-                if (withCookies) {
+                if (withCookies && isSoundCloudHost(u)) {
                     String cookie = cookieHeader(ctx);
                     if (!TextUtils.isEmpty(cookie)) {
                         c.setRequestProperty("Cookie", cookie);
@@ -141,9 +178,9 @@ public final class ScApi {
                     if (loc == null) {
                         throw new IOException("HTTP " + code);
                     }
-                    if (loc.startsWith("/")) {
-                        URL base = new URL(url);
-                        loc = base.getProtocol() + "://" + base.getHost() + loc;
+                    loc = new URL(new URL(url), loc).toString();
+                    if (!loc.startsWith("https://")) {
+                        throw new IOException("insecure redirect rejected");
                     }
                     if (redirectsLeft <= 0) {
                         throw new IOException("too many redirects");
@@ -151,7 +188,7 @@ public final class ScApi {
                     return httpGet(ctx, loc, withCookies, redirectsLeft - 1);
                 }
                 if (code == 401 || code == 403) {
-                    throw new ApiException("unauthorized (" + code + ")");
+                    throw new ApiException("unauthorized (" + code + ")", code);
                 }
                 if (code >= 400) {
                     throw new IOException("HTTP " + code);
@@ -164,6 +201,7 @@ public final class ScApi {
             } catch (ApiException e) {
                 throw e;
             } catch (IOException e) {
+                ScLog.failed("HTTP request attempt " + (attempt + 1), url, e);
                 last = e;
                 sleep(400L * (attempt + 1));
             } finally {
@@ -187,13 +225,18 @@ public final class ScApi {
             c.setRequestMethod("GET");
             c.setRequestProperty("User-Agent", UA);
             c.setRequestProperty("Accept-Encoding", "identity");
-            String cookie = cookieHeader(ctx);
-            if (!TextUtils.isEmpty(cookie)) {
-                c.setRequestProperty("Cookie", cookie);
+            if (isSoundCloudHost(u)) {
+                String cookie = cookieHeader(ctx);
+                if (!TextUtils.isEmpty(cookie)) {
+                    c.setRequestProperty("Cookie", cookie);
+                }
             }
             int code = c.getResponseCode();
             if (code >= 300 && code < 400) {
                 return c.getHeaderField("Location");
+            }
+            if (code == 401 || code == 403) {
+                throw new ApiException("unauthorized (" + code + ")", code);
             }
             if (code >= 400) {
                 throw new IOException("HTTP " + code);
@@ -212,7 +255,8 @@ public final class ScApi {
             } finally {
                 try {
                     in.close();
-                } catch (Exception ignored) {
+                } catch (Exception error) {
+                    ScLog.failed("close redirect response", url, error);
                 }
             }
             return null;
@@ -242,11 +286,13 @@ public final class ScApi {
         } finally {
             try {
                 out.close();
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                ScLog.e("close API output", error);
             }
             try {
                 in.close();
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                ScLog.e("close API response", error);
             }
         }
     }
@@ -254,14 +300,17 @@ public final class ScApi {
     private static void sleep(long ms) {
         try {
             Thread.sleep(ms);
-        } catch (InterruptedException ignored) {
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            ScLog.e("API retry interrupted", error);
         }
     }
 
     private static String enc(String s) {
         try {
             return URLEncoder.encode(s == null ? "" : s, "UTF-8");
-        } catch (Exception e) {
+        } catch (Exception error) {
+            ScLog.e("UTF-8 URL encoding unavailable", error);
             return "";
         }
     }
@@ -277,17 +326,29 @@ public final class ScApi {
     private static volatile String sCookieHeader = "";
 
     /** Must be called from the UI thread (WebView/CookieManager). */
-    public static void refreshCookies(Context ctx) {
+    public static boolean refreshCookies(Context ctx) {
         try {
             String cookie = android.webkit.CookieManager.getInstance()
                     .getCookie("https://soundcloud.com");
             if (cookie == null) {
                 cookie = "";
             }
+            if (!Prefs.get(ctx).saveCookieHeader(cookie)) {
+                sCookieHeader = "";
+                ScLog.e("cannot securely save session; credential storage unavailable");
+                return false;
+            }
             sCookieHeader = cookie;
-            Prefs.get(ctx).saveCookieHeader(cookie);
-        } catch (Throwable ignore) {
+            return true;
+        } catch (Exception error) {
+            sCookieHeader = "";
+            ScLog.e("cannot refresh session securely", error);
+            return false;
         }
+    }
+
+    public static void forgetCookies() {
+        sCookieHeader = "";
     }
 
     public static String cookieHeader(Context ctx) {
@@ -312,97 +373,160 @@ public final class ScApi {
     // =======================================================================
 
     public static String clientId(Context ctx) throws IOException {
+        return clientId(ctx, null);
+    }
+
+    private static String clientId(Context ctx, String rejected) throws IOException {
+        Prefs prefs = Prefs.get(ctx);
+        long generation = CLIENT_GENERATION.get();
+        String cached;
+        long cachedTime;
         synchronized (LOCK) {
-            if (!TextUtils.isEmpty(sClientId)) {
-                return sClientId;
+            if (sClientId == null) {
+                sClientId = prefs.clientId();
+                sClientTime = prefs.clientIdTime();
             }
-            Prefs prefs = Prefs.get(ctx);
-            String cached = prefs.clientId();
-            long age = System.currentTimeMillis() - prefs.clientIdTime();
-            if (!TextUtils.isEmpty(cached) && age < CLIENT_ID_TTL_MS) {
-                sClientId = cached;
-                return cached;
+            cached = sClientId;
+            cachedTime = sClientTime;
+        }
+        long age = System.currentTimeMillis() - cachedTime;
+        if (!TextUtils.isEmpty(cached) && !cached.equals(rejected)
+                && age >= 0 && age < CLIENT_ID_TTL_MS) {
+            return cached;
+        }
+        String discovered = scrapeClientId(ctx, rejected);
+        if (!TextUtils.isEmpty(discovered)) {
+            return publishClientId(ctx, discovered, generation);
+        }
+        if (!TextUtils.isEmpty(cached) && !cached.equals(rejected) && validClientId(ctx, cached)) {
+            return publishClientId(ctx, cached, generation);
+        }
+        for (String id : BUILTIN_IDS) {
+            if (!id.equals(rejected) && validClientId(ctx, id)) {
+                return publishClientId(ctx, id, generation);
             }
-            // 1) scrape a fresh id straight from soundcloud.com
-            try {
-                String scraped = scrapeClientId(ctx);
-                if (!TextUtils.isEmpty(scraped) && validClientId(ctx, scraped)) {
-                    prefs.saveClientId(scraped);
-                    sClientId = scraped;
-                    return scraped;
+        }
+        throw new ApiException("no working client_id");
+    }
+
+    private static String publishClientId(Context ctx, String id, long generation) throws IOException {
+        synchronized (LOCK) {
+            if (CLIENT_GENERATION.get() != generation) {
+                // A failure invalidated the cache while this discovery was running.
+                if (!TextUtils.isEmpty(sClientId)) {
+                    return sClientId;
                 }
-            } catch (Exception ignored) {
+                throw new ApiException("client_id changed during discovery; retry request");
             }
-            // 2) the cached one (maybe it is still fine, just older than the TTL)
-            if (!TextUtils.isEmpty(cached) && validClientId(ctx, cached)) {
-                prefs.saveClientId(cached);
-                sClientId = cached;
-                return cached;
-            }
-            // 3) built in ids
-            for (String id : BUILTIN_IDS) {
-                try {
-                    if (validClientId(ctx, id)) {
-                        prefs.saveClientId(id);
-                        sClientId = id;
-                        return id;
-                    }
-                } catch (Exception ignored) {
-                }
-            }
-            throw new ApiException("no working client_id");
+            sClientId = id;
+            sClientTime = System.currentTimeMillis();
+            Prefs.get(ctx).saveClientId(id);
+            return id;
         }
     }
 
-    /** Forces a fresh discovery on the next call (used by the "reload" action). */
     public static void clearClientId() {
         synchronized (LOCK) {
+            CLIENT_GENERATION.incrementAndGet();
             sClientId = null;
+            sClientTime = 0;
         }
+    }
+
+    /** Compare-and-clear: an old 401 must not invalidate another thread's new id. */
+    public static void invalidateClientId(Context ctx, String rejected) {
+        synchronized (LOCK) {
+            if (rejected != null && !TextUtils.isEmpty(sClientId) && !rejected.equals(sClientId)) {
+                return;
+            }
+            CLIENT_GENERATION.incrementAndGet();
+            sClientId = null;
+            sClientTime = 0;
+            Prefs.get(ctx).clearClientId(rejected);
+        }
+    }
+
+    public static void clearClientId(Context ctx) {
+        invalidateClientId(ctx, null);
     }
 
     public static boolean validClientId(Context ctx, String id) {
+        String url = apiV2() + "/search/tracks?q=test&limit=1&client_id=" + enc(id);
         try {
-            String url = API_V2 + "/search/tracks?q=test&limit=1&client_id=" + enc(id);
             String body = httpGet(ctx, url, false);
             return body != null && body.contains("\"collection\"");
-        } catch (Exception e) {
+        } catch (Exception error) {
+            ScLog.failed("validate client_id", url, error);
             return false;
         }
     }
 
-    public static String scrapeClientId(Context ctx) throws IOException {
-        String html = httpGet(ctx, SOUNDCLOUD_HOME, false);
-        Set<String> scripts = new LinkedHashSet<>();
-        Matcher m = P_JS.matcher(html);
-        while (m.find() && scripts.size() < 10) {
-            scripts.add(m.group());
-        }
-
-        for (Pattern p : new Pattern[]{P_CLIENT_ID_1, P_CLIENT_ID_2, P_CLIENT_ID_3, P_HYDRATION}) {
-            Matcher mm = p.matcher(html);
-            if (mm.find()) {
-                return mm.group(1);
+    private static void collectIds(String text, Set<String> ids) {
+        for (Pattern pattern : new Pattern[]{P_CLIENT_ID_1, P_CLIENT_ID_2, P_CLIENT_ID_3, P_HYDRATION}) {
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                ids.add(matcher.group(1));
             }
         }
+    }
 
+    /** Public for diagnostics; returns a validated id, trying EVERY candidate. */
+    public static String scrapeClientId(Context ctx) throws IOException {
+        return scrapeClientId(ctx, null);
+    }
+
+    private static String scrapeClientId(Context ctx, String rejected) throws IOException {
+        String html = httpGet(ctx, home(), false);
+        Set<String> scripts = new LinkedHashSet<>();
+        Matcher matcher = P_JS.matcher(html);
+        while (matcher.find() && scripts.size() < 10) {
+            scripts.add(matcher.group());
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        collectIds(html, ids);
+        for (String id : ids) {
+            if (!id.equals(rejected) && validClientId(ctx, id)) {
+                return id;
+            }
+        }
         int tried = 0;
         for (String script : scripts) {
             if (tried++ >= 8) {
                 break;
             }
             try {
-                String js = httpGet(ctx, script, false);
-                for (Pattern p : new Pattern[]{P_CLIENT_ID_1, P_CLIENT_ID_2, P_CLIENT_ID_3}) {
-                    Matcher mm = p.matcher(js);
-                    if (mm.find()) {
-                        return mm.group(1);
+                ids.clear();
+                collectIds(httpGet(ctx, script, false), ids);
+                for (String id : ids) {
+                    if (!id.equals(rejected) && validClientId(ctx, id)) {
+                        return id;
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                ScLog.failed("scrape JavaScript", script, error);
             }
         }
         return null;
+    }
+
+    private interface ClientRequest<T> {
+        T run(String clientId) throws IOException;
+    }
+
+    /** At most one authorization retry, with a newly scraped and validated id. */
+    private static <T> T withClient(Context ctx, ClientRequest<T> request) throws IOException {
+        String id = clientId(ctx);
+        try {
+            return request.run(id);
+        } catch (ApiException error) {
+            if (!error.isAuthorizationFailure()) {
+                throw error;
+            }
+            ScLog.e("API authorization failed; refreshing client_id once");
+            invalidateClientId(ctx, id);
+            String fresh = clientId(ctx, id);
+            return request.run(fresh);
+        }
     }
 
     // =======================================================================
@@ -428,19 +552,18 @@ public final class ScApi {
         if (!TextUtils.isEmpty(query) && query.startsWith("http")) {
             return resolveUrl(ctx, query.trim());
         }
-        String url = API_V2 + "/search/tracks?q=" + enc(query)
-                + "&client_id=" + enc(clientId(ctx))
-                + "&limit=" + limit + "&offset=" + offset
-                + "&app_locale=en&linked_partitioning=1";
-        JSONObject json = parseJson(httpGet(ctx, url, true));
-        return collection(json);
+        return withClient(ctx, id -> {
+            String url = apiV2() + "/search/tracks?q=" + enc(query)
+                    + "&client_id=" + enc(id) + "&limit=" + limit + "&offset=" + offset
+                    + "&app_locale=en&linked_partitioning=1";
+            return collection(parseJson(httpGet(ctx, url, true)));
+        });
     }
 
     public static List<Track> charts(Context ctx, String genreSlug, int limit) throws IOException {
-        String url = API_V2 + "/charts?kind=trending&genre=soundcloud:genres:" + enc(genreSlug)
-                + "&limit=" + limit + "&client_id=" + enc(clientId(ctx))
-                + "&app_locale=en";
-        JSONObject json = parseJson(httpGet(ctx, url, true));
+        JSONObject json = withClient(ctx, id -> parseJson(httpGet(ctx,
+                apiV2() + "/charts?kind=trending&genre=soundcloud:genres:" + enc(genreSlug)
+                        + "&limit=" + limit + "&client_id=" + enc(id) + "&app_locale=en", true)));
         List<Track> out = new ArrayList<>();
         JSONArray col = json.optJSONArray("collection");
         if (col != null) {
@@ -461,9 +584,8 @@ public final class ScApi {
 
     /** Resolves a SoundCloud URL (track or playlist) into tracks. */
     public static List<Track> resolveUrl(Context ctx, String url) throws IOException {
-        String api = API_V2 + "/resolve?url=" + enc(url) + "&client_id=" + enc(clientId(ctx));
-        JSONObject json = parseJson(httpGet(ctx, api, true));
-        return fromResolved(json);
+        return withClient(ctx, id -> fromResolved(parseJson(httpGet(ctx,
+                apiV2() + "/resolve?url=" + enc(url) + "&client_id=" + enc(id), true))));
     }
 
     private static List<Track> fromResolved(JSONObject json) {
@@ -491,8 +613,8 @@ public final class ScApi {
 
     /** Downloads a single track object (adds download_url / track_authorization). */
     public static Track getTrack(Context ctx, long id) throws IOException {
-        String url = API_V2 + "/tracks/" + id + "?client_id=" + enc(clientId(ctx));
-        return Track.fromJson(parseJson(httpGet(ctx, url, true)));
+        return withClient(ctx, cid -> Track.fromJson(parseJson(httpGet(ctx,
+                apiV2() + "/tracks/" + id + "?client_id=" + enc(cid), true))));
     }
 
     private static List<Track> collection(JSONObject json) {
@@ -519,7 +641,13 @@ public final class ScApi {
 
     /** Direct CDN url of the 128 kbps progressive stream (fallbacks included). */
     public static String streamUrl(Context ctx, Track track) throws IOException {
-        String cid = clientId(ctx);
+        if (!track.streamable) {
+            throw new ApiException("not streamable");
+        }
+        return withClient(ctx, id -> streamUrlWithClient(ctx, track, id));
+    }
+
+    private static String streamUrlWithClient(Context ctx, Track track, String cid) throws IOException {
         String auth = TextUtils.isEmpty(track.trackAuth) ? "" : "&track_authorization=" + enc(track.trackAuth);
 
         String[] paths = {
@@ -528,20 +656,32 @@ public final class ScApi {
         };
         for (String path : paths) {
             try {
-                String direct = directUrlFrom(ctx, API_V2 + path);
+                String direct = directUrlFrom(ctx, apiV2() + path);
                 if (!TextUtils.isEmpty(direct)) {
                     return direct;
                 }
-            } catch (Exception ignored) {
+            } catch (ApiException error) {
+                if (error.isAuthorizationFailure()) {
+                    throw error;
+                }
+                ScLog.e("stream format unavailable", error);
+            } catch (Exception error) {
+                ScLog.failed("resolve stream format", apiV2() + "/media/soundcloud:tracks:" + track.id, error);
             }
         }
         // Legacy redirect endpoint, still answers for most public tracks.
         try {
-            String target = redirectTarget(ctx, API_V1 + "/tracks/" + track.id + "/stream?client_id=" + enc(cid));
+            String target = redirectTarget(ctx, apiV1() + "/tracks/" + track.id + "/stream?client_id=" + enc(cid));
             if (!TextUtils.isEmpty(target)) {
                 return target;
             }
-        } catch (Exception ignored) {
+        } catch (ApiException error) {
+            if (error.isAuthorizationFailure()) {
+                throw error;
+            }
+            ScLog.e("legacy stream unavailable", error);
+        } catch (Exception error) {
+            ScLog.failed("resolve legacy stream", apiV1() + "/tracks/" + track.id + "/stream", error);
         }
         throw new ApiException("not streamable");
     }
@@ -561,13 +701,18 @@ public final class ScApi {
             c.setRequestProperty("User-Agent", UA);
             c.setRequestProperty("Accept", "application/json, */*");
             c.setRequestProperty("Accept-Encoding", "gzip");
-            String cookie = cookieHeader(ctx);
-            if (!TextUtils.isEmpty(cookie)) {
-                c.setRequestProperty("Cookie", cookie);
+            if (isSoundCloudHost(u)) {
+                String cookie = cookieHeader(ctx);
+                if (!TextUtils.isEmpty(cookie)) {
+                    c.setRequestProperty("Cookie", cookie);
+                }
             }
             int code = c.getResponseCode();
             if (code >= 300 && code < 400) {
                 return c.getHeaderField("Location");
+            }
+            if (code == 401 || code == 403) {
+                throw new ApiException("unauthorized (" + code + ")", code);
             }
             if (code >= 400) {
                 throw new IOException("HTTP " + code);
@@ -590,6 +735,7 @@ public final class ScApi {
                 try {
                     json = new JSONObject(trimmed);
                 } catch (JSONException broken) {
+                    ScLog.failed("parse stream response", url, broken);
                     return null;
                 }
                 String direct = json.optString("url", "");
@@ -618,29 +764,27 @@ public final class ScApi {
      * @return direct url of the file that can be handed to DownloadManager.
      */
     public static String downloadUrl(Context ctx, Track track, boolean original) throws IOException {
-        if (original) {
+        if (!original) {
+            return streamUrl(ctx, track);
+        }
+        return withClient(ctx, cid -> {
             String raw = track.downloadUrl;
             if (TextUtils.isEmpty(raw)) {
-                try {
-                    Track fresh = getTrack(ctx, track.id);
-                    raw = fresh == null ? "" : fresh.downloadUrl;
-                } catch (Exception ignored) {
-                }
+                Track fresh = getTrack(ctx, track.id);
+                raw = fresh == null ? "" : fresh.downloadUrl;
             }
-            if (!TextUtils.isEmpty(raw)) {
-                String sep = raw.contains("?") ? "&" : "?";
-                String full = raw + sep + "client_id=" + enc(clientId(ctx));
-                String token = oauthToken(ctx);
-                if (!TextUtils.isEmpty(token)) {
-                    full += "&oauth_token=" + enc(token);
-                }
-                String target = redirectTarget(ctx, full);
-                if (!TextUtils.isEmpty(target)) {
-                    return target;
-                }
+            if (TextUtils.isEmpty(raw)) {
+                throw new ApiException("original file unavailable");
             }
-        }
-        return streamUrl(ctx, track);
+            String full = raw + (raw.contains("?") ? "&" : "?") + "client_id=" + enc(cid);
+            // The DownloadManager receives the Cookie header separately. Do not
+            // put oauth_token in a URL persisted in the system download database.
+            String target = redirectTarget(ctx, full);
+            if (TextUtils.isEmpty(target)) {
+                throw new ApiException("original file unavailable");
+            }
+            return target;
+        });
     }
 
     /** Best effort guess of the file extension for a direct media url. */
@@ -652,13 +796,13 @@ public final class ScApi {
                 path = path.substring(0, q);
             }
             String lower = path.toLowerCase();
-            String[] exts = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".aiff", ".aif", ".flac"};
+            String[] exts = {".m3u8", ".m3u", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".aiff", ".aif", ".flac"};
             for (String ext : exts) {
                 if (lower.endsWith(ext)) {
                     return ext;
                 }
             }
         }
-        return ".mp3";
+        return original ? ".bin" : ".mp3";
     }
 }

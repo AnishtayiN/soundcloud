@@ -48,7 +48,7 @@ class Track(object):
             downloadable=data.get("downloadable", False),
             policy=data.get("policy", "ALLOW"),
             track_authorization=data.get("track_authorization"),
-            download_url="",
+            download_url=data.get("download_url"),
         )
         return track if track.id else None
 
@@ -65,6 +65,8 @@ class Track(object):
             "streamable": self.streamable,
             "downloadable": self.downloadable,
             "policy": self.policy,
+            "track_authorization": self.track_authorization,
+            "download_url": self.download_url,
         }
 
     # --------------------------------------------------------------- helpers --

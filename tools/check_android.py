@@ -1010,6 +1010,8 @@ def check_java(trees, classpath, resources):
                     declared_type = type_name(declaration.type)
                     for declarator in declaration.declarators:
                         locals_[declarator.name] = declared_type
+                for resource in kinds_in(member, javalang.tree.TryResource):
+                    locals_[resource.name] = type_name(resource.type)
                 caught = {}
                 for try_node in kinds_in(member, javalang.tree.TryStatement):
                     written = set()
@@ -1017,7 +1019,13 @@ def check_java(trees, classpath, resources):
                         written |= set(clause.parameter.types or [])
                     if not written:
                         continue
-                    for statement in try_node.block or []:
+                    protected = list(try_node.block or [])
+                    # Resource initializers are inside the implicit try/finally
+                    # generated for try-with-resources, including its close().
+                    for resource in try_node.resources or []:
+                        if resource.value is not None:
+                            protected.append(resource.value)
+                    for statement in protected:
                         for node in calls_in(statement):
                             caught.setdefault(id(node), set()).update(written)
                 context = {"declared": declared, "caught": caught, "locals": locals_}
@@ -1036,6 +1044,36 @@ def check_java(trees, classpath, resources):
 def check_manifest(trees):
     with open(MANIFEST, encoding="utf-8") as fh:
         manifest = fh.read()
+    # The historical regex-only checks silently accepted malformed XML.
+    try:
+        document = ET.fromstring(manifest)
+    except ET.ParseError as error:
+        problem("AndroidManifest.xml is not valid XML: %s" % error)
+        return
+    application = document.find("application")
+    if application is None:
+        problem("manifest has no application")
+        return
+    for key, expected in (("supportsRtl", "true"), ("allowBackup", "false")):
+        if application.get(ANDROID_NS + key) != expected:
+            problem("application must declare android:%s=%s" % (key, expected))
+        else:
+            ok("manifest " + key)
+    receivers = application.findall("receiver")
+    media = next((node for node in receivers if node.get(ANDROID_NS + "name", "").endswith("MediaBtnReceiver")), None)
+    if media is None:
+        problem("MediaBtnReceiver is not registered")
+    else:
+        if media.get(ANDROID_NS + "exported") != "false":
+            problem("MediaBtnReceiver must be non-exported")
+        actions = [node.get(ANDROID_NS + "name") for node in media.findall("intent-filter/action")]
+        if "android.intent.action.MEDIA_BUTTON" not in actions:
+            problem("MediaBtnReceiver lacks MEDIA_BUTTON filter")
+        else:
+            ok("private media-button receiver")
+    service = next((node for node in application.findall("service") if node.get(ANDROID_NS + "name") == ".PlayerService"), None)
+    if service is None or service.get(ANDROID_NS + "exported") != "false":
+        problem("PlayerService must exist and be non-exported")
     for match in re.finditer(r'android:name="\.?([A-Za-z0-9_.$]+)"', manifest):
         name = match.group(1)
         if name.startswith("android.permission") or name.startswith("android.intent"):
@@ -1052,6 +1090,47 @@ def check_manifest(trees):
         ok("permission %s" % permission)
     if 'android:foregroundServiceType="mediaPlayback"' not in manifest:
         problem("the player service must declare foregroundServiceType=mediaPlayback (Android 14+)")
+
+
+def check_reliability():
+    # Explicit resource parity protects the Persian default from accidental
+    # English replacement during future module splits.
+    def strings(folder):
+        path = os.path.join(RES, folder, "strings.xml")
+        root = ET.parse(path).getroot()
+        return {node.get("name"): node.text or "" for node in root.findall("string")}
+    default, persian, english = strings("values"), strings("values-fa"), strings("values-en")
+    for name, text in default.items():
+        if name not in persian or persian[name] != text:
+            problem("Persian default string changed or missing: " + name)
+        else:
+            ok("fa string " + name)
+        if name not in english:
+            problem("English translation missing: " + name)
+    expectations = {
+        "Art.java": ("MEMORY_BUDGET", "getAllocationByteCount", "inJustDecodeBounds", "inSampleSize"),
+        "SearchController.java": ("requestGeneration != generation",),
+        "PlayerBar.java": ("Context.RECEIVER_NOT_EXPORTED",),
+        "MainActivity.java": ("Context.RECEIVER_NOT_EXPORTED",),
+        "PlayerService.java": ("audio focus denied", "STATE_ERROR", "MediaBtnReceiver.class"),
+        "Prefs.java": ("EncryptedSharedPreferences", "allow_roaming"),
+        "Downloader.java": ("mimeFor", "setAllowedOverRoaming(prefs.allowRoaming())", "track_id"),
+        "DownloadCompletionReceiver.java": ("IS_PENDING", "STATUS_SUCCESSFUL"),
+        "Track.java": ('"track_authorization"', '"download_url"'),
+    }
+    for filename, tokens in expectations.items():
+        text = open(os.path.join(JAVA_DIR, "com", "soundcloudx", "app", filename), encoding="utf-8").read()
+        for token in tokens:
+            if token not in text:
+                problem("%s missing reliability invariant %s" % (filename, token))
+            else:
+                ok(filename + " " + token)
+    for filename in ("ScApi.java", "PlayerService.java"):
+        text = open(os.path.join(JAVA_DIR, "com", "soundcloudx", "app", filename), encoding="utf-8").read()
+        if re.search(r"catch\s*\([^)]*\b(?:ignored|ignore)\b[^)]*\)\s*\{\s*\}", text):
+            problem(filename + " contains a silent ignored catch")
+        else:
+            ok(filename + " no silent ignored catch")
 
 
 def main(argv):
@@ -1071,6 +1150,8 @@ def main(argv):
     check_xml_references(resources)
     print("   %d names in R" % sum(len(v) for v in resources.values()))
 
+    print("== reliability / localization invariants ==")
+    check_reliability()
     print("== java ==")
     trees = parse_sources()
     print("   %d source files" % len(trees))
