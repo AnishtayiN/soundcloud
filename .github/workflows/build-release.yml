@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: verify-${{ github.ref }}
+  group: verify-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -170,8 +170,10 @@ jobs:
         if: always()
         run: |
           mkdir -p emulator-evidence
-          adb pull /sdcard/Download/scx-smoke-fa-${{ matrix.api }}.png emulator-evidence/ || true
-          adb logcat -d -s ScLog:* AndroidRuntime:E > emulator-evidence/logcat.txt || true
+          timeout 20s adb pull /sdcard/Android/data/com.soundcloudx.app.debug/files/smoke-fa-${{ matrix.api }}.png emulator-evidence/ || true
+          timeout 20s adb logcat -d -s SoundCloudX:* AndroidRuntime:E > emulator-evidence/logcat.txt || true
+          cp instrumentation.txt emulator-evidence/ || true
+          cp release-ui.xml emulator-evidence/ || true
           cp -r android/app/build/outputs/androidTest-results emulator-evidence/ || true
       - uses: actions/upload-artifact@v4
         if: always()
@@ -200,6 +202,12 @@ jobs:
       - name: Build EXE
         working-directory: windows
         run: pyinstaller SoundCloudX.spec --noconfirm --clean
+      - name: Stage executable for verification
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $exe = Get-ChildItem windows/dist -Recurse -Filter '*.exe' | Select-Object -First 1
+          Copy-Item $exe.FullName (Join-Path 'artifacts' 'SoundCloudX.exe')
       - name: Smoke-test actual EXE with real DPAPI
         shell: pwsh
         env:
@@ -208,7 +216,11 @@ jobs:
           $exe = Get-ChildItem windows/dist -Recurse -Filter '*.exe' | Select-Object -First 1
           $env:SCX_SMOKE_REPORT = Join-Path $PWD 'windows-smoke.json'
           $process = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
-          if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'EXE smoke timed out' }
+          if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            if (Test-Path $env:SCX_SMOKE_REPORT) { Get-Content $env:SCX_SMOKE_REPORT }
+            throw 'EXE smoke timed out'
+          }
           Get-Content $env:SCX_SMOKE_REPORT
           if ($process.ExitCode -ne 0) { throw "EXE smoke failed: $($process.ExitCode)" }
       - name: Stage executable
@@ -220,6 +232,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-exe
+          path: artifacts/SoundCloudX.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-unverified
           path: artifacts/SoundCloudX.exe
       - uses: actions/upload-artifact@v4
         if: always()

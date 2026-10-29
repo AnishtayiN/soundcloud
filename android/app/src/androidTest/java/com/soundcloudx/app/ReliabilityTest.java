@@ -200,8 +200,8 @@ public class ReliabilityTest {
             button.putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE));
             context.sendBroadcast(button);
             waitForState(PlayerService.STATE_PAUSED);
-            File screenshot = new File(android.os.Environment.getExternalStoragePublicDirectory(
-                    android.os.Environment.DIRECTORY_DOWNLOADS), "scx-smoke-fa-" + Build.VERSION.SDK_INT + ".png");
+            File screenshot = new File(context.getExternalFilesDir(null),
+                    "smoke-fa-" + Build.VERSION.SDK_INT + ".png");
             device.takeScreenshot(screenshot);
         }
         try (ActivityScenario<MainActivity> ignored = ActivityScenario.launch(MainActivity.class)) {

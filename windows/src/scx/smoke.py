@@ -10,6 +10,13 @@ import wave
 
 
 def run():
+    def checkpoint(stage):
+        path = os.environ.get("SCX_SMOKE_REPORT")
+        if path:
+            with open(path, "w", encoding="utf-8") as stream:
+                json.dump({"success": False, "stage": stage}, stream)
+
+    checkpoint("imports")
     from . import util
     from .api import SoundCloud
     from .store import Store
@@ -62,6 +69,7 @@ def run():
         cache = os.path.join(folder, "cache")
         os.makedirs(cache)
         util.cache_dir = lambda: cache
+        checkpoint("credential-vault")
         if os.name == "nt":
             store = Store(os.path.join(folder, "settings.json"))
             # Real DPAPI round trip on the Windows runner, not a mocked vault.
@@ -76,6 +84,7 @@ def run():
                 def get(self, key): return self.values.get(key, "")
                 def set(self, key, value): self.values[key] = value
             store = Store(os.path.join(folder, "settings.json"), credentials=MemoryVault())
+        checkpoint("ui-start")
         api = SoundCloud(store, session=Session())
         app = App(api, store, auto_load=False)
 
@@ -97,6 +106,7 @@ def run():
             pump(10, lambda: bool(app.tracks))
             assert app.tracks[0].title == raw["title"]
             report["checks"].append("persian-search")
+            checkpoint("play")
             app.play_index(0)
             pump(15, lambda: app.now_playing is not None and app.player.playing)
             report["checks"].append("play")
@@ -105,6 +115,7 @@ def run():
             app.toggle_play()
             assert app.player.playing
             report["checks"].append("pause-resume")
+            checkpoint("download")
             app.toggle_favorite_current()
             app.start_download(app.now_playing)
             try:
@@ -115,6 +126,7 @@ def run():
                                      (getattr(job, "state", None), getattr(job, "error", None)))
             assert os.path.getsize(app.download_jobs[0].path) == len(wav)
             report["checks"].append("complete-download")
+            checkpoint("restart")
         finally:
             app.on_close()
         restored = Store(store.path)

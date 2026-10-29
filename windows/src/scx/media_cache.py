@@ -20,6 +20,7 @@ class MediaCache(object):
         self.limit_mb = max(1, int(limit_mb or 500))
         self._lock = threading.RLock()
         self._active = set()
+        self._path_locks = {}
         os.makedirs(folder, exist_ok=True)
         self.trim()
 
@@ -79,8 +80,17 @@ class MediaCache(object):
     def get_or_fetch(self, track, url, on_progress=None, cancel_event=None):
         path = self.path_for(track, url)
         with self._lock:
+            path_lock = self._path_locks.setdefault(path, threading.RLock())
+        with path_lock:
+            return self._fetch_locked(track, url, path, on_progress, cancel_event)
+
+    def _fetch_locked(self, track, url, path, on_progress, cancel_event):
+        with self._lock:
             self._active.add(path)
         try:
+            if cancel_event is not None and cancel_event.is_set():
+                from .downloader import DownloadCancelled
+                raise DownloadCancelled()
             if os.path.exists(path):
                 if self.validate(path):
                     os.utime(path, None)
@@ -115,16 +125,20 @@ class MediaCache(object):
             budget = self.limit_mb * 1024 * 1024
             total = sum(item[2] for item in entries)
             freed = 0
-            protected = {os.path.join(self.folder, os.path.basename(p)) for p in self._active}
+            def base_name(value):
+                for suffix in (".part.json.tmp", ".part.json", ".part"):
+                    if value.endswith(suffix):
+                        return value[:-len(suffix)]
+                return value
+            protected = {base_name(p) for p in self._active}
             for _mtime, path, size in sorted(entries):
                 if total <= budget:
                     break
-                bases = [path]
-                if path.endswith(".part"):
-                    bases.extend([path + ".json", path + ".json.tmp"])
-                group = [p for p in bases if os.path.isfile(p)]
-                if any(p in protected or p[:-5] in protected for p in group):
+                base = base_name(path)
+                if base in protected:
                     continue
+                group = [p for p in (base, base + ".part", base + ".part.json", base + ".part.json.tmp")
+                         if os.path.isfile(p)]
                 try:
                     actual = sum(os.path.getsize(p) for p in group)
                     for p in group:

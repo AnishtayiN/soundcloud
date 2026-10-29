@@ -15,7 +15,7 @@ assert 'جستجو' in text and 'داغ‌ترین‌ها' in text, 'release did
 PY
 adb uninstall com.soundcloudx.app
 adb install -r testing/SoundCloudX-1.0.0-debug.apk
-adb install -r testing/SoundCloudX-1.0.0-debug-androidTest.apk
+adb install -r testing/app-debug-androidTest.apk
 adb shell settings put global window_animation_scale 0
 adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
@@ -24,5 +24,5 @@ grep -q 'INSTRUMENTATION_CODE: -1' instrumentation.txt
 if grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=' instrumentation.txt; then exit 1; fi
 package=com.soundcloudx.app.debug
 for sdk in 24 34 36; do
-  adb pull "/sdcard/Android/data/$package/files/smoke-fa-$sdk.png" "scx-smoke-fa-$sdk.png" 2>/dev/null || true
+  timeout 15s adb pull "/sdcard/Android/data/$package/files/smoke-fa-$sdk.png" "scx-smoke-fa-$sdk.png" 2>/dev/null || true
 done
