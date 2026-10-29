@@ -134,6 +134,9 @@ class Player(object):
         if pygame is not None:
             try:
                 pygame.mixer.music.stop()
+                # SDL_mixer keeps the source file open until unload on Windows.
+                # Releasing it also makes cache eviction and test cleanup reliable.
+                pygame.mixer.music.unload()
             except Exception:
                 pass
         self._playing = False
