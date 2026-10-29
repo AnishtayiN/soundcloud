@@ -23,7 +23,9 @@ text = Path('release-ui.xml').read_text(encoding='utf-8')
 assert 'جستجو' in text and 'ترندها' in text, 'release did not launch with Persian RTL UI'
 PY
 adb uninstall com.soundcloudx.app
-adb install -r testing/SoundCloudX-1.0.0-debug.apk
+debug_apk=$(find testing -maxdepth 1 -name '*-debug.apk' ! -name '*androidTest*' -print -quit)
+if [ -z "$debug_apk" ]; then echo 'debug APK missing' >&2; exit 1; fi
+adb install -r "$debug_apk"
 adb install -r testing/app-debug-androidTest.apk
 adb shell settings put global window_animation_scale 0
 adb shell settings put global transition_animation_scale 0
