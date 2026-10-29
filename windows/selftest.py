@@ -556,7 +556,6 @@ def test_ui():
     from scx.api import SoundCloud
     from scx.store import Store
     with tempfile.TemporaryDirectory() as folder:
-        from scx.credentials import CredentialError
         class UiVault(object):
             value = ""
             def get(self, key): return self.value
