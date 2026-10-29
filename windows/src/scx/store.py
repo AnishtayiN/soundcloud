@@ -205,16 +205,25 @@ class Store(object):
 
     def toggle_favorite(self, track):
         with self._lock:
+            previous = self.favorites()
             items = self.favorites()
             for index, item in enumerate(items):
                 if int(item.get("id", 0)) == int(track.id):
                     items.pop(index)
                     self.data["favorites"] = items
-                    self.save()
+                    try:
+                        self.save()
+                    except Exception:
+                        self.data["favorites"] = previous
+                        raise
                     return False
             items.insert(0, track.to_json())
             self.data["favorites"] = items
-            self.save()
+            try:
+                self.save()
+            except Exception:
+                self.data["favorites"] = previous
+                raise
             return True
 
     def favorite_tracks(self):
@@ -231,11 +240,16 @@ class Store(object):
 
     def add_download(self, name, path, title, artist, url="", size=0, track_id=None):
         with self._lock:
+            previous = copy.deepcopy(self.data.get("downloads", []))
             items = [item for item in self.data.get("downloads", []) if item.get("path") != path]
             items.insert(0, {"name": name, "path": path, "title": title, "artist": artist,
                              "url": _strip_url(url), "size": size, "track_id": track_id})
             self.data["downloads"] = items[:200]
-            self.save()
+            try:
+                self.save()
+            except Exception:
+                self.data["downloads"] = previous
+                raise
 
     def downloads(self):
         with self._lock:

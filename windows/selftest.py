@@ -445,6 +445,14 @@ def test_regressions():
                 check("save failure reported", True)
         check("atomic failure preserves settings", open(store.path, "rb").read() == before)
         check("failed setting rolled back in memory", recovered.get("volume") == backup_volume)
+        favorites_before = recovered.favorites()
+        with mock.patch("scx.store.os.replace", side_effect=OSError("disk full")):
+            try:
+                recovered.toggle_favorite(Track.from_json(dict(TRACK_B, id=222)))
+                check("favorite save failure reported", False)
+            except OSError:
+                check("favorite save failure reported", True)
+        check("failed favorite mutation rolled back", recovered.favorites() == favorites_before)
         legacy = os.path.join(folder, "legacy.json")
         with open(legacy, "w", encoding="utf-8") as stream:
             json.dump({"cookie_header": "oauth_token=SECRET", "favorites": [track.to_json()]}, stream)

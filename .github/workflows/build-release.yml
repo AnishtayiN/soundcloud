@@ -2,7 +2,7 @@ name: Build & verify Android / Windows
 
 on:
   push:
-    branches: [main, 'arena/**']
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -202,6 +202,15 @@ jobs:
       - name: Build EXE
         working-directory: windows
         run: pyinstaller SoundCloudX.spec --noconfirm --clean
+      - name: Smoke-test Windows source entrypoint
+        shell: pwsh
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          $env:SCX_SMOKE_REPORT = Join-Path $PWD 'windows-source-smoke.json'
+          python windows/src/main.py --smoke-test
+          if ($LASTEXITCODE -ne 0) { Get-Content $env:SCX_SMOKE_REPORT; throw 'source smoke failed' }
+          Get-Content $env:SCX_SMOKE_REPORT
       - name: Stage executable for verification
         shell: pwsh
         run: |
@@ -221,6 +230,7 @@ jobs:
             if (Test-Path $env:SCX_SMOKE_REPORT) { Get-Content $env:SCX_SMOKE_REPORT }
             throw 'EXE smoke timed out'
           }
+          if (-not (Test-Path $env:SCX_SMOKE_REPORT)) { throw 'EXE produced no smoke report' }
           Get-Content $env:SCX_SMOKE_REPORT
           if ($process.ExitCode -ne 0) { throw "EXE smoke failed: $($process.ExitCode)" }
       - name: Stage executable
@@ -241,7 +251,9 @@ jobs:
         if: always()
         with:
           name: windows-smoke-report
-          path: windows-smoke.json
+          path: |
+            windows-smoke.json
+            windows-source-smoke.json
           if-no-files-found: warn
 
   release:

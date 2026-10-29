@@ -28,6 +28,8 @@ def main():
         import json
         from scx.smoke import run
         report_path = os.environ.get("SCX_SMOKE_REPORT", "smoke-report.json")
+        with open(report_path, "w", encoding="utf-8") as stream:
+            json.dump({"success": False, "stage": "bootstrap"}, stream)
         try:
             report = run()
             with open(report_path, "w", encoding="utf-8") as stream:
