@@ -34,8 +34,8 @@ def _bytes(blob):
 def _dpapi(data, encrypt):
     if sys.platform != "win32":
         raise CredentialError("Windows credential storage is unavailable on this platform")
-    crypt = ctypes.windll.crypt32
-    kernel = ctypes.windll.kernel32
+    crypt = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     crypt.CryptProtectData.argtypes = [ctypes.POINTER(_Blob), ctypes.c_wchar_p,
                                      ctypes.POINTER(_Blob), ctypes.c_void_p,
                                      ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(_Blob)]
@@ -49,10 +49,17 @@ def _dpapi(data, encrypt):
     source = _Blob(len(data), ctypes.cast(ctypes.create_string_buffer(data), ctypes.POINTER(ctypes.c_ubyte)))
     entropy = _Blob(len(_ENTROPY), ctypes.cast(ctypes.create_string_buffer(_ENTROPY), ctypes.POINTER(ctypes.c_ubyte)))
     output = _Blob()
-    function = crypt.CryptProtectData if encrypt else crypt.CryptUnprotectData
-    if not function(ctypes.byref(source), "SoundCloud X", ctypes.byref(entropy),
-                    None, None, 0x01, ctypes.byref(output)):
-        raise CredentialError("Windows credential protection failed (code %s)" % kernel.GetLastError())
+    if encrypt:
+        success = crypt.CryptProtectData(ctypes.byref(source), ctypes.c_wchar_p("SoundCloud X"),
+                                         ctypes.byref(entropy), None, None, 0x01, ctypes.byref(output))
+    else:
+        description = ctypes.c_wchar_p()
+        success = crypt.CryptUnprotectData(ctypes.byref(source), ctypes.byref(description),
+                                           ctypes.byref(entropy), None, None, 0x01, ctypes.byref(output))
+        if description.value:
+            kernel.LocalFree(ctypes.cast(description, ctypes.c_void_p))
+    if not success:
+        raise CredentialError("Windows credential protection failed (code %s)" % ctypes.get_last_error())
     return _bytes(output)
 
 
