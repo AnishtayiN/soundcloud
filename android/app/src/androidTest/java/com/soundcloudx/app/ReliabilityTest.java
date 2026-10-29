@@ -230,10 +230,14 @@ public class ReliabilityTest {
         assertTrue(held);
         try {
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                context.startService(new Intent(context, PlayerService.class));
+            });
+            long created = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (PlayerService.get() == null && System.nanoTime() < created) Thread.sleep(50);
+            assertNotNull(PlayerService.get());
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                 Track track = new Track(); track.id = 111; track.title = "آهنگ آزمایشی"; track.streamable = true;
-                PlayerService player = new PlayerService();
-                player.onCreate();
-                player.playAll(java.util.Collections.singletonList(track), 0);
+                PlayerService.get().playAll(java.util.Collections.singletonList(track), 0);
             });
             waitForState(PlayerService.STATE_ERROR);
             assertEquals(context.getString(R.string.error_audio_focus), PlayerService.get().getMessage());

@@ -10,6 +10,8 @@ import wave
 
 
 def run():
+    import faulthandler
+    faulthandler.dump_traceback_later(90, exit=True)
     def checkpoint(stage):
         path = os.environ.get("SCX_SMOKE_REPORT")
         if path:
@@ -142,4 +144,5 @@ def run():
         finally:
             second.on_close()
     report["success"] = True
+    faulthandler.cancel_dump_traceback_later()
     return report
