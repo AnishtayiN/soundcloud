@@ -4,8 +4,10 @@ import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.graphics.Bitmap;
 import android.os.Build;
+import android.os.IBinder;
 import android.view.KeyEvent;
 
 import androidx.test.core.app.ActivityScenario;
@@ -228,20 +230,34 @@ public class ReliabilityTest {
                     android.media.AudioManager.AUDIOFOCUS_GAIN) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         }
         assertTrue(held);
+        final PlayerService[] connected = new PlayerService[1];
+        ServiceConnection connection = new ServiceConnection() {
+            @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+                connected[0] = ((PlayerService.LocalBinder) binder).service();
+            }
+            @Override public void onServiceDisconnected(ComponentName name) { connected[0] = null; }
+        };
+        assertTrue(context.bindService(new Intent(context, PlayerService.class), connection,
+                Context.BIND_AUTO_CREATE));
         try {
-            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-                context.startService(new Intent(context, PlayerService.class));
-            });
             long created = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            while (PlayerService.get() == null && System.nanoTime() < created) Thread.sleep(50);
-            assertNotNull(PlayerService.get());
+            while (connected[0] == null && System.nanoTime() < created) Thread.sleep(50);
+            assertNotNull("real PlayerService did not bind", connected[0]);
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                 Track track = new Track(); track.id = 111; track.title = "آهنگ آزمایشی"; track.streamable = true;
-                PlayerService.get().playAll(java.util.Collections.singletonList(track), 0);
+                connected[0].playAll(java.util.Collections.singletonList(track), 0);
             });
-            waitForState(PlayerService.STATE_ERROR);
-            assertEquals(context.getString(R.string.error_audio_focus), PlayerService.get().getMessage());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(25);
+            while (connected[0].getState() != PlayerService.STATE_ERROR && System.nanoTime() < deadline) {
+                Thread.sleep(100);
+            }
+            assertEquals(PlayerService.STATE_ERROR, connected[0].getState());
+            assertEquals(context.getString(R.string.error_audio_focus), connected[0].getMessage());
         } finally {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                if (connected[0] != null) connected[0].stop();
+            });
+            context.unbindService(connection);
             if (Build.VERSION.SDK_INT >= 26) audio.abandonAudioFocusRequest(hold);
             else audio.abandonAudioFocus(null);
         }

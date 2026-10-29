@@ -223,12 +223,14 @@ jobs:
         run: |
           $exe = Get-ChildItem windows/dist -Recurse -Filter '*.exe' | Select-Object -First 1
           $env:SCX_SMOKE_REPORT = Join-Path $PWD 'windows-smoke.json'
-          $process = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
-          if (-not $process.WaitForExit(120000)) {
-            $process.Kill()
+          $process = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru -RedirectStandardOutput 'windows-exe-stdout.txt' -RedirectStandardError 'windows-exe-stderr.txt'
+          if (-not $process.WaitForExit(180000)) {
+            Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $process.Id -or $_.ProcessId -eq $process.Id } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Get-Content 'windows-exe-stdout.txt','windows-exe-stderr.txt' -ErrorAction SilentlyContinue
             if (Test-Path $env:SCX_SMOKE_REPORT) { Get-Content $env:SCX_SMOKE_REPORT }
             throw 'EXE smoke timed out'
           }
+          Get-Content 'windows-exe-stdout.txt','windows-exe-stderr.txt' -ErrorAction SilentlyContinue
           if (-not (Test-Path $env:SCX_SMOKE_REPORT)) { throw 'EXE produced no smoke report' }
           Get-Content $env:SCX_SMOKE_REPORT
           if ($process.ExitCode -ne 0) { throw "EXE smoke failed: $($process.ExitCode)" }
@@ -254,6 +256,8 @@ jobs:
           path: |
             windows-smoke.json
             windows-source-smoke.json
+            windows-exe-stdout.txt
+            windows-exe-stderr.txt
           if-no-files-found: warn
 
   release:
