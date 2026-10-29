@@ -170,8 +170,8 @@ jobs:
         if: always()
         run: |
           mkdir -p emulator-evidence
-          timeout 20s adb pull /sdcard/Android/data/com.soundcloudx.app.debug/files/smoke-fa-${{ matrix.api }}.png emulator-evidence/ || true
-          timeout 20s adb logcat -d -s SoundCloudX:* AndroidRuntime:E > emulator-evidence/logcat.txt || true
+          timeout 20s adb exec-out run-as com.soundcloudx.app.debug cat files/smoke-fa-${{ matrix.api }}.png > emulator-evidence/smoke-fa-${{ matrix.api }}.png || true
+          timeout 20s adb logcat -d -s SoundCloudX:* AndroidRuntime:E ActivityManager:W > emulator-evidence/logcat.txt || true
           cp instrumentation.txt emulator-evidence/ || true
           cp release-ui.xml emulator-evidence/ || true
           cp -r android/app/build/outputs/androidTest-results emulator-evidence/ || true
@@ -243,6 +243,7 @@ jobs:
           name: windows-exe
           path: artifacts/SoundCloudX.exe
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: windows-exe-unverified
           path: artifacts/SoundCloudX.exe
