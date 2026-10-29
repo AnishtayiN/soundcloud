@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+collect_live_evidence() {
+  timeout 20s adb logcat -d -s SoundCloudX:* AndroidRuntime:E ActivityManager:W > live-logcat.txt || true
+  timeout 20s adb exec-out run-as com.soundcloudx.app.debug cat files/smoke-fa-24.png > live-smoke-fa-24.png || true
+  timeout 20s adb exec-out run-as com.soundcloudx.app.debug cat files/smoke-fa-34.png > live-smoke-fa-34.png || true
+  timeout 20s adb exec-out run-as com.soundcloudx.app.debug cat files/smoke-fa-36.png > live-smoke-fa-36.png || true
+}
+trap collect_live_evidence EXIT
 # Release install/launch check first; fixture UI tests use the debug app's
 # loopback-only test seam and cannot affect the production SoundCloud endpoints.
 release_apk=$(find release -name '*.apk' -print -quit)
@@ -25,6 +32,4 @@ adb shell am instrument -w -r com.soundcloudx.app.debug.test/androidx.test.runne
 grep -q 'INSTRUMENTATION_CODE: -1' instrumentation.txt
 if grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=' instrumentation.txt; then exit 1; fi
 package=com.soundcloudx.app.debug
-for sdk in 24 34 36; do
-  timeout 15s adb pull "/sdcard/Android/data/$package/files/smoke-fa-$sdk.png" "scx-smoke-fa-$sdk.png" 2>/dev/null || true
-done
+collect_live_evidence

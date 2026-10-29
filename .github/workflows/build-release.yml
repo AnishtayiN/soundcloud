@@ -174,6 +174,8 @@ jobs:
           timeout 20s adb logcat -d -s SoundCloudX:* AndroidRuntime:E ActivityManager:W > emulator-evidence/logcat.txt || true
           cp instrumentation.txt emulator-evidence/ || true
           cp release-ui.xml emulator-evidence/ || true
+          cp live-logcat.txt emulator-evidence/ || true
+          for f in live-smoke-fa-*.png; do [ -s "$f" ] && cp "$f" emulator-evidence/; done
           cp -r android/app/build/outputs/androidTest-results emulator-evidence/ || true
       - uses: actions/upload-artifact@v4
         if: always()
