@@ -184,6 +184,7 @@ public class PlayerService extends Service {
             }
             Object extra = intent.getSerializableExtra(EXTRA_TRACK);
             Track track = extra instanceof Track ? (Track) extra : null;
+            ScLog.d("onStartCommand cmd=" + cmd + " track=" + (track != null) + " state=" + state);
             if (cmd != null) {
                 handle(cmd, track);
             }
@@ -688,7 +689,19 @@ public class PlayerService extends Service {
     //  audio focus
     // =======================================================================
 
+    // Debug-only deterministic focus-denial seam used by instrumentation.
+    private Boolean testFocusResult;
+
+    void setTestFocusResult(Boolean result) {
+        if (BuildConfig.DEBUG) {
+            testFocusResult = result;
+        }
+    }
+
     private boolean requestFocus() {
+        if (BuildConfig.DEBUG && testFocusResult != null) {
+            return testFocusResult;
+        }
         if (audio == null) {
             return true;
         }

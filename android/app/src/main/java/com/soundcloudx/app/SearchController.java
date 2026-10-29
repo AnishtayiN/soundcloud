@@ -221,6 +221,7 @@ final class SearchController {
             return;
         }
         Track track = tracks.get(position);
+        ScLog.d("playAt position=" + position + " service=" + (activity.playerBar.service() != null));
         if (!track.streamable) {
             activity.toast(R.string.toast_not_streamable);
             return;

@@ -219,17 +219,6 @@ public class ReliabilityTest {
         android.media.AudioAttributes attributes = new android.media.AudioAttributes.Builder()
                 .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
                 .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).build();
-        android.media.AudioFocusRequest hold = null;
-        boolean held;
-        if (Build.VERSION.SDK_INT >= 26) {
-            hold = new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(attributes).setAcceptsDelayedFocusGain(false).build();
-            held = audio.requestAudioFocus(hold) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-        } else {
-            held = audio.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC,
-                    android.media.AudioManager.AUDIOFOCUS_GAIN) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-        }
-        assertTrue(held);
         final PlayerService[] connected = new PlayerService[1];
         ServiceConnection connection = new ServiceConnection() {
             @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -243,6 +232,7 @@ public class ReliabilityTest {
             long created = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (connected[0] == null && System.nanoTime() < created) Thread.sleep(50);
             assertNotNull("real PlayerService did not bind", connected[0]);
+            connected[0].setTestFocusResult(false);
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                 Track track = new Track(); track.id = 111; track.title = "آهنگ آزمایشی"; track.streamable = true;
                 connected[0].playAll(java.util.Collections.singletonList(track), 0);
@@ -258,8 +248,6 @@ public class ReliabilityTest {
                 if (connected[0] != null) connected[0].stop();
             });
             context.unbindService(connection);
-            if (Build.VERSION.SDK_INT >= 26) audio.abandonAudioFocusRequest(hold);
-            else audio.abandonAudioFocus(null);
         }
     }
 

@@ -76,6 +76,7 @@ public class MediaBtnReceiver extends BroadcastReceiver {
         if (seekMs != 0) {
             i.putExtra(PlayerService.EXTRA_SEEK, seekMs);
         }
+        ScLog.d("dispatch " + cmd + " track=" + (track != null));
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(i);

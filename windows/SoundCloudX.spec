@@ -15,7 +15,7 @@ hidden = [
 # Things that must never end up inside a 30 MB downloader.
 excludes = [
     "numpy", "matplotlib", "scipy", "pandas", "test", "unittest",
-    "setuptools", "pip", "wheel", "email", "http.server", "xmlrpc",
+    "setuptools", "pip", "wheel", "http.server", "xmlrpc",
     "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
     "PIL.ImageQt", "PIL.ImageTk", "PIL.ImageShow",
     "curses", "distutils", "lib2to3", "pydoc_data",
