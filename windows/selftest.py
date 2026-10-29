@@ -313,8 +313,7 @@ def test_regressions():
     import wave
     import io
     from unittest import mock
-    from scx.api import SoundCloud, AuthorizationError, HOME
-    from scx.credentials import CredentialError
+    from scx.api import SoundCloud, HOME
     from scx.downloader import Downloader, IncompleteDownload
     from scx.media_cache import MediaCache
     from scx.models import Track
